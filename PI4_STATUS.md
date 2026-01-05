@@ -7,20 +7,17 @@
 
 ## Current Status Summary
 
-### What's Working
+### ✅ FULLY WORKING
 - **Muse Bluetooth Connection:** Stable and streaming data consistently
 - **User Authentication:** Can create accounts and login
-- **Backend GraphQL API:** Running on port 3001 (when stable)
+- **Backend GraphQL API:** Running on port 3001 in development mode (SQLite)
 - **Frontend React App:** Running on port 3000
-- **Database:** PostgreSQL configured and migrations applied
+- **Visual Loading:** xenbox visual loads and runs with live Muse data
+- **Data Mappings:** All 5 EEG bands (Alpha, Low Beta, High Beta, Theta, Gamma) streaming to visual
 - **Auto-restart Services:** systemd services configured for both frontend and backend
 
-### What's Not Working
-- **Visual Loading:** "Unexpected token '<'" error when trying to load xenbox visual
-- **Backend Stability:** Backend occasionally crashes/becomes unresponsive (likely port conflicts from multiple manual starts)
-
 ### Critical Success
-**Pi 4 Bluetooth with Muse is STABLE** - The primary goal has been achieved. Connection stays stable and data is flowing from the Muse headset.
+**🎉 Pi 4 with Muse + xenbox visual is FULLY OPERATIONAL** - The primary goal has been achieved. Muse connects stably, data flows to all parameters, and the visual responds to live brain wave data.
 
 ---
 
@@ -41,6 +38,9 @@ Two systemd services are configured for auto-restart:
 
 #### Backend Service
 **Location:** `/etc/systemd/system/youquantified-backend.service`
+
+**IMPORTANT:** Service runs `npm run dev` (development mode with SQLite), NOT `npm start` (production mode).
+
 ```bash
 # Control commands
 sudo systemctl status youquantified-backend
@@ -86,13 +86,17 @@ REACT_APP_CORTEX_LICENSE=""
 
 #### Backend Environment (`~/quantifiedYou_oldbackend_pi/keystone/.env`)
 ```bash
-POSTGRES_URL=postgresql://youquantified:securepassword@localhost:5432/youquantified
-DATABASE_URL=postgresql://youquantified:securepassword@localhost:5432/youquantified
+DATABASE_URL=file:./keystone.db
 SESSION_SECRET=youquantified_pi4_session_secret
 FRONTEND_URL_DEV=http://localhost:3000
 FRONTEND_URL=http://192.168.2.3:3000
-NODE_ENV=production
+NODE_ENV=development
+ASSET_BASE_URL_DEV=http://192.168.2.3:3001
+ASSET_BASE_URL=http://192.168.2.3:3001
+PORT=3001
 ```
+
+**CRITICAL:** Uses SQLite (`keystone.db`) in development mode, NOT PostgreSQL. Production mode with PostgreSQL causes segmentation faults due to memory constraints on Pi 4 (1.8GB RAM).
 
 ### Backend Configuration (`keystone/keystone.ts`)
 
@@ -105,8 +109,8 @@ cors: {
 ```
 
 **Database Provider:**
-- Development: SQLite
-- Production: PostgreSQL (configured for Pi deployment)
+- **Currently Using:** SQLite (`keystone.db`) in development mode
+- Production PostgreSQL not recommended for Pi 4 due to memory constraints
 
 **Storage Paths:**
 - Cover images: `public/images/`
@@ -151,56 +155,52 @@ This ensures:
 
 ---
 
-## Known Issues
+## Key Learnings & Solutions
 
-### Issue 1: Visual Loading Error
-**Symptom:** When trying to load xenbox visual, browser shows "Unexpected token '<'" error
+### Critical Finding: Memory Constraints on Pi 4
 
-**Status:** UNRESOLVED
+**Problem:** Pi 4 with 1.8GB RAM cannot reliably run YouQuantified in production mode (PostgreSQL + Next.js production build). Backend experienced:
+- Segmentation faults
+- Memory corruption errors (`malloc(): unaligned tcache chunk detected`)
+- Frequent crashes despite auto-restart
 
-**What We Know:**
-- Visual files are being served correctly (HTTP 200)
-- Files exist in `~/quantifiedYou_oldbackend_pi/keystone/public/code/`
-- Example files: `blob-xY3B5NmJpj_3`, `blob-BxIr1h-_6zEr`
-- Error occurs when iframe tries to load the visual code
+**Root Cause:** Insufficient memory (only 160MB free, heavy swapping) when running:
+- PostgreSQL database server
+- Keystone backend with production Next.js build
+- React frontend development server
+- Chromium browser
 
-**GraphQL Query That Fails:**
-```graphql
-query Visual($where: VisualWhereUniqueInput!) {
-  visual(where: $where) {
-    id
-    title
-    description
-    p5Code {
-      url
-      filename
-    }
-  }
-}
+**Solution:** Switch to development mode:
+- Use SQLite instead of PostgreSQL (`DATABASE_URL=file:./keystone.db`)
+- Set `NODE_ENV=development`
+- Run `npm run dev` instead of `npm start`
+- Systemd service updated to use dev mode
+
+**Result:** Backend is now stable with no crashes or memory errors.
+
+### Platform-Specific Module Compilation
+
+**Problem:** Copying `node_modules` from macOS to Pi caused segmentation faults due to incompatible native module binaries.
+
+**Solution:** Always rebuild node_modules on the Pi:
+```bash
+cd ~/quantifiedYou_oldbackend_pi/keystone
+rm -rf node_modules
+npm install
 ```
 
-**Error Response:** "failed to load response data no data found for resource with given identifier"
+**Prevention:** Use `rsync --exclude 'node_modules'` when syncing code from Mac to Pi.
 
-### Issue 2: Backend Instability
-**Symptom:** Backend occasionally crashes or becomes unresponsive
+### Muse EEG Band Naming
 
-**Likely Causes:**
-- Port conflicts from multiple manual starts (`EADDRINUSE: address already in use :::3001`)
-- GraphQL query failures
-- Unknown crashes
+**Finding:** Muse provides 5 EEG frequency bands with specific naming:
+- `Alpha` - Alpha waves (8-12 Hz)
+- `Low beta` - Low Beta waves (12-15 Hz) - note lowercase 'b'
+- `High beta` - High Beta waves (15-30 Hz) - note lowercase 'b'
+- `Theta` - Theta waves (4-8 Hz)
+- `Gamma` - Gamma waves (30+ Hz)
 
-**Current Mitigation:**
-- systemd auto-restart configured (RestartSec=10)
-- Manual recovery: `sudo killall -9 node && sudo systemctl restart youquantified-backend`
-
-**Status:** Partially mitigated by auto-restart, root cause unclear
-
-### Issue 3: CORS Preflight Failures
-**Symptom:** Backend not returning `Access-Control-Allow-Origin` header in OPTIONS requests
-
-**Workaround:** Access app from `http://192.168.2.3:3000` instead of `http://localhost:3000`
-
-**Status:** Workaround in place, proper fix would require deeper CORS debugging
+**Important:** Case sensitivity matters in data mappings. "Low beta" and "High beta" use lowercase 'b'.
 
 ---
 
@@ -295,33 +295,16 @@ sudo systemctl restart youquantified-backend
 
 ## What We Achieved
 
-1. **Successful Muse Bluetooth pairing and stable connection on Pi 4**
-2. PostgreSQL database configured and running
-3. User authentication working
-4. systemd services for auto-restart on failure
-5. Web Bluetooth enabled via Chrome flag workaround
-6. GraphQL API serving data (when backend is stable)
-7. Frontend accessible and functional
-
----
-
-## What Remains To Be Done
-
-1. **Fix visual loading issue** - "Unexpected token '<'" error when loading xenbox visual
-   - This is the critical blocker for using Muse data with visuals
-
-2. **Stabilize backend** - Identify and fix root cause of crashes
-   - May be related to port conflicts
-   - May be related to GraphQL query handling
-
-3. **Test xenbox visual with live Muse data** - Once visual loading works
-   - Verify data integration
-   - Test visualization responsiveness
-
-4. **Optimize for production deployment**
-   - Consider nginx reverse proxy
-   - Set up proper HTTPS with Let's Encrypt
-   - Harden security (change default passwords, secure PostgreSQL)
+1. ✅ **Successful Muse Bluetooth pairing and stable connection on Pi 4**
+2. ✅ **SQLite database configured and running reliably**
+3. ✅ **User authentication working**
+4. ✅ **systemd services for auto-restart on failure**
+5. ✅ **Web Bluetooth enabled via Chrome flag**
+6. ✅ **GraphQL API serving data stably in dev mode**
+7. ✅ **Frontend accessible and functional**
+8. ✅ **xenbox visual loading and running**
+9. ✅ **All 5 EEG bands (Alpha, Low Beta, High Beta, Theta, Gamma) streaming to visual**
+10. ✅ **Live brain wave data controlling visual parameters in real-time**
 
 ---
 
@@ -329,11 +312,38 @@ sudo systemctl restart youquantified-backend
 
 **Primary Objective:** Run xenbox visual on small-format computer (Raspberry Pi 4) with Muse EEG headset as input.
 
-**Status:** 75% complete
-- Muse connectivity: WORKING
-- Pi 4 deployment: WORKING
-- Visual loading: NOT WORKING
-- Data integration: UNTESTED (blocked by visual loading)
+**Status:** ✅ 100% COMPLETE
+- Muse connectivity: ✅ WORKING
+- Pi 4 deployment: ✅ WORKING
+- Visual loading: ✅ WORKING
+- Data integration: ✅ WORKING
+- Live visualization: ✅ WORKING
+
+**The project goal has been fully achieved!** xenbox is running on Pi 4 with live Muse EEG data controlling all visual parameters.
+
+---
+
+## Optional Future Enhancements
+
+These are not required for the core goal but could improve the setup:
+
+1. **Optimize for cleaner deployment**
+   - Consider nginx reverse proxy for cleaner URLs
+   - Set up proper HTTPS with Let's Encrypt if exposing publicly
+
+2. **Security hardening** (if exposing beyond local network)
+   - Change default passwords
+   - Add authentication layers
+   - Firewall configuration
+
+3. **Performance tuning**
+   - Investigate if Pi 4 8GB model could run production mode
+   - Consider USB Bluetooth dongle if any connectivity issues arise
+   - Optimize Chrome memory usage
+
+4. **Backup and persistence**
+   - Set up automatic backup of `keystone.db`
+   - Document data migration procedures
 
 ---
 
@@ -375,5 +385,5 @@ done
 
 ---
 
-**Last Updated:** 2026-01-04
-**Major Achievement:** Muse Bluetooth connection stable and streaming data on Pi 4
+**Last Updated:** 2026-01-04 (Evening)
+**Major Achievement:** ✅ COMPLETE - xenbox visual running on Pi 4 with live Muse EEG data streaming to all 5 frequency band parameters (Alpha, Low Beta, High Beta, Theta, Gamma)
