@@ -66,19 +66,27 @@ rsync -avz --exclude 'node_modules' \
 
 Create `.env` file in `frontend/` directory:
 
+**IMPORTANT:** Use the Pi's IP address (not localhost) to enable Web Bluetooth with Chrome flag.
+
 ```bash
+# First, get your Pi's IP address
+hostname -I | awk '{print $1}'
+# Example output: 192.168.2.3
+
 cd ~/quantifiedYou_oldbackend_pi/frontend
 cat > .env << 'EOF'
-REACT_APP_UPLOAD_URI_ENDPOINT_DEV="http://localhost:3001/api/graphql"
-REACT_APP_UPLOAD_URI_ENDPOINT="http://localhost:3001/api/graphql"
-REACT_APP_COLLAB_ENDPOINT_DEV="ws://localhost:3001/collab"
-REACT_APP_COLLAB_ENDPOINT="ws://localhost:3001/collab"
-REACT_APP_GEN_AI_ENDPOINT_DEV="http://localhost:2024"
-REACT_APP_GEN_AI_ENDPOINT="http://localhost:2024"
+REACT_APP_UPLOAD_URI_ENDPOINT_DEV="http://192.168.2.3:3001/api/graphql"
+REACT_APP_UPLOAD_URI_ENDPOINT="http://192.168.2.3:3001/api/graphql"
+REACT_APP_COLLAB_ENDPOINT_DEV="ws://192.168.2.3:3001/collab"
+REACT_APP_COLLAB_ENDPOINT="ws://192.168.2.3:3001/collab"
+REACT_APP_GEN_AI_ENDPOINT_DEV="http://192.168.2.3:2024"
+REACT_APP_GEN_AI_ENDPOINT="http://192.168.2.3:2024"
 REACT_APP_CORTEX_CLIENT_ID=""
 REACT_APP_CORTEX_CLIENT_SECRET=""
 REACT_APP_CORTEX_LICENSE=""
 EOF
+
+# Replace 192.168.2.3 with your actual Pi IP address
 ```
 
 ---
@@ -104,9 +112,15 @@ Create `keystone/.env`:
 ```bash
 cd ~/quantifiedYou_oldbackend_pi/keystone
 cat > .env << 'EOF'
-DATABASE_URL="postgresql://youquantified:your_secure_password@localhost:5432/youquantified"
-SESSION_SECRET="change_this_to_a_random_string_min_32_chars"
+POSTGRES_URL=postgresql://youquantified:securepassword@localhost:5432/youquantified
+DATABASE_URL=postgresql://youquantified:securepassword@localhost:5432/youquantified
+SESSION_SECRET=youquantified_pi4_session_secret
+FRONTEND_URL_DEV=http://localhost:3000
+FRONTEND_URL=http://192.168.2.3:3000
+NODE_ENV=production
 EOF
+
+# Replace the password and session secret with your own secure values
 ```
 
 ---
@@ -161,57 +175,104 @@ sudo reboot
 
 ---
 
-## Step 8: Start Services
+## Step 8: Setup systemd Services (Recommended)
 
-Create a script to run all three services:
+Create systemd services for auto-restart on failure:
 
+### Backend Service
 ```bash
-cat > ~/quantifiedYou_oldbackend_pi/start.sh << 'EOF'
-#!/bin/bash
+sudo tee /etc/systemd/system/youquantified-backend.service << 'EOF'
+[Unit]
+Description=YouQuantified Backend (Keystone)
+After=network.target postgresql.service
 
-# Start backend
-cd ~/quantifiedYou_oldbackend_pi/keystone
-npm run dev > ~/yq-backend.log 2>&1 &
-echo "Backend started (PID: $!)"
+[Service]
+Type=simple
+User=xenbox
+WorkingDirectory=/home/xenbox/quantifiedYou_oldbackend_pi/keystone
+Environment=NODE_ENV=production
+ExecStart=/usr/bin/npm start
+Restart=always
+RestartSec=10
+StandardOutput=append:/home/xenbox/yq-backend.log
+StandardError=append:/home/xenbox/yq-backend.log
 
-# Wait for backend
-sleep 10
-
-# Start frontend
-cd ~/quantifiedYou_oldbackend_pi/frontend
-npm start > ~/yq-frontend.log 2>&1 &
-echo "Frontend started (PID: $!)"
-
-# Start genAI
-cd ~/quantifiedYou_oldbackend_pi/genAI
-npm run dev > ~/yq-genai.log 2>&1 &
-echo "GenAI started (PID: $!)"
-
-echo "All services started. Check logs:"
-echo "  Backend: ~/yq-backend.log"
-echo "  Frontend: ~/yq-frontend.log"
-echo "  GenAI: ~/yq-genai.log"
+[Install]
+WantedBy=multi-user.target
 EOF
-
-chmod +x ~/quantifiedYou_oldbackend_pi/start.sh
 ```
 
-Run it:
+### Frontend Service
 ```bash
-~/quantifiedYou_oldbackend_pi/start.sh
+sudo tee /etc/systemd/system/youquantified-frontend.service << 'EOF'
+[Unit]
+Description=YouQuantified Frontend (React)
+After=network.target
+
+[Service]
+Type=simple
+User=xenbox
+WorkingDirectory=/home/xenbox/quantifiedYou_oldbackend_pi/frontend
+Environment=BROWSER=none
+ExecStart=/usr/bin/npm start
+Restart=always
+RestartSec=10
+StandardOutput=append:/home/xenbox/yq-frontend.log
+StandardError=append:/home/xenbox/yq-frontend.log
+
+[Install]
+WantedBy=multi-user.target
+EOF
 ```
 
+### Enable and Start Services
+```bash
+# Reload systemd
+sudo systemctl daemon-reload
+
+# Enable services to start on boot
+sudo systemctl enable youquantified-backend
+sudo systemctl enable youquantified-frontend
+
+# Start services
+sudo systemctl start youquantified-backend
+sudo systemctl start youquantified-frontend
+
+# Check status
+sudo systemctl status youquantified-backend --no-pager
+sudo systemctl status youquantified-frontend --no-pager
+```
+
+**Note:** Replace `xenbox` with your actual username and adjust paths if needed.
+
 ---
 
-## Step 9: Test the Application
+## Step 9: Configure Web Bluetooth in Chrome
 
-1. **Access the app**: Open Chromium on Pi 4 and go to `http://localhost:3000`
+**REQUIRED FOR MUSE CONNECTION**
+
+Web Bluetooth only works on localhost, HTTPS, or flagged insecure origins.
+
+1. Open Chromium on the Pi
+2. Navigate to: `chrome://flags/#unsafely-treat-insecure-origin-as-secure`
+3. In the text field, enter: `http://192.168.2.3:3000` (replace with your Pi's actual IP)
+4. Click "Relaunch"
+5. **May require 2-3 relaunches** before it takes effect
+
+---
+
+## Step 10: Test the Application
+
+**IMPORTANT:** Always access via IP address (not localhost) for Web Bluetooth to work.
+
+1. **Access the app**: Open Chromium and go to `http://192.168.2.3:3000` (replace with your Pi's IP)
 2. **Create account**: Use email-based account (e.g., `test@example.com` / `Test1234!`)
-3. **Test xenbox visual**: Should work with Tone.js library now included
+3. **Verify Muse button**: Should NOT be greyed out if Chrome flag is properly set
+4. **Test login**: Should work without CORS errors
 
 ---
 
-## Step 10: Test Muse Connection
+## Step 11: Test Muse Connection
 
 1. Power on your Muse headset
 2. In YouQuantified, go to Data tab
@@ -242,6 +303,22 @@ bluetoothctl info <MAC_ADDRESS>
 # Check power management
 cat /sys/class/bluetooth/hci0/power/control
 ```
+
+---
+
+## Current Status (2026-01-04)
+
+**What's Working:**
+- Muse Bluetooth connection is STABLE and streaming data consistently
+- User authentication (create account, login) works
+- Backend and frontend running with systemd auto-restart
+- Web Bluetooth enabled via Chrome flag
+
+**Known Issues:**
+- Visual loading shows "Unexpected token '<'" error when trying to load xenbox visual
+- Backend occasionally becomes unresponsive (mitigated by auto-restart)
+
+**See PI4_STATUS.md for detailed current state and troubleshooting.**
 
 ---
 

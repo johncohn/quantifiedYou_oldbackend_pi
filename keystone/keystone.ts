@@ -46,13 +46,8 @@ export default withAuth(
     server: {
       port: 3001,
       cors: {
-        origin: [
-          process.env.NODE_ENV === "development"
-            ? process.env.FRONTEND_URL_DEV
-            : process.env.FRONTEND_URL,
-        ],
+        origin: true,
         credentials: true,
-        hostname: '127.0.0.1' // May secure server? Check alongside nginx request proxy
       },
     },
     storage: {
