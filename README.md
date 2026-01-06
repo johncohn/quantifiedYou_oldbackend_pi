@@ -1,6 +1,20 @@
 # You: Quantified
 This project brings tools to easily visualize, record and work with physiological data on a web-based environment. It's meant as a learning tool to help us understand the _Quantified Self_ (self-knowledge through numbers). You can visit the website at [youquantified.com](https://youquantified.com).
 
+## Raspberry Pi Setup
+
+**IMPORTANT:** When connecting to the Raspberry Pi via Ethernet from your Mac laptop, you must enable **Internet Sharing** in System Settings:
+1. Go to System Settings → General → Sharing
+2. Enable "Internet Sharing"
+3. Share your connection from: Wi-Fi
+4. To computers using: Ethernet (or your USB-to-Ethernet adapter)
+
+Without Internet Sharing enabled, the Pi will not be accessible on the network and you won't be able to find its IP address.
+
+For complete Pi 4 setup instructions, see:
+- **PI4_SETUP.md** - Installation and configuration guide
+- **PI4_STATUS.md** - Current status, troubleshooting, and configuration details
+
 ## Installing and running the App
 To install and run this app, you must run the front end and back end (keystone) separately. Navigate into each folder on different command lines and run
 
