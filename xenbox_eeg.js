@@ -10,23 +10,130 @@
  *   {"name": "Gamma", "suggested": ["Gamma"]}
  * ]
  *
- * Description:
- * This visualization uses EEG brain wave data from a Muse headset to control
- * audio effects in real-time. Each frequency band (Alpha, Beta, Theta, Gamma)
- * modulates different audio parameters, creating an auditory neurofeedback experience.
+ * =============================================================================
+ * HOW IT WORKS: EEG DATA FLOW TO AUDIO EFFECTS
+ * =============================================================================
  *
- * EEG Bands:
- * - Alpha (8-12 Hz): Relaxed, calm state - controls Chorus
- * - Low Beta (12-15 Hz): Relaxed focus - controls Flanger
- * - High Beta (15-30 Hz): Active thinking - controls Reverb
- * - Theta (4-8 Hz): Deep relaxation, meditation - controls Delay
- * - Gamma (30+ Hz): High-level cognition - controls Distortion
+ * STEP 1: RECEIVE RAW EEG DATA
+ * - Muse sends 5 frequency bands at ~10-12 Hz
+ * - Values arrive already multiplied by YouQuantified slider positions
+ * - Example: If slider is 0.5 and Muse outputs 0.8, you receive 0.4
+ *
+ * STEP 2: CALCULATE WEIGHTED SUM
+ * - weighted = alpha + lowBeta + highBeta + theta + gamma
+ * - Shows total combined signal strength across all bands
+ *
+ * STEP 3: NORMALIZE TO RELATIVE VALUES
+ * - alpha_rel = alpha / weighted
+ * - Each band becomes a fraction of total (always sums to 1.0)
+ * - Example: If alpha is 40% of total signal, alpha_rel = 0.4
+ * - This removes absolute amplitude and focuses on proportional mix
+ *
+ * STEP 4: ADAPTIVE THRESHOLD LEARNING
+ * - Calculates running average of Alpha and Gamma over the session
+ * - If your typical Alpha is 0.25, that becomes your personal baseline
+ * - Adapts to individual brain wave patterns
+ *
+ * STEP 5: SIGMOID THRESHOLDING
+ * - Converts continuous EEG values into effect intensities (0 to 1)
+ * - Sigmoid function: 1 / (1 + exp(-steepness * (value - threshold)))
+ * - When value < threshold: Output approaches 0 (effect off)
+ * - When value = threshold: Output = 0.5 (effect at half)
+ * - When value > threshold: Output approaches 1 (effect fully on)
+ * - High steepness (60) creates sharp, binary-like transitions
+ *
+ * STEP 6: APPLY TO AUDIO EFFECTS
+ * - Each effect's "wet" value (0-1) controls dry/wet mix
+ * - wet = 0: Pure dry signal (no effect)
+ * - wet = 1: Full effect applied
+ *
+ * =============================================================================
+ * EFFECT MAPPINGS AND THRESHOLDS
+ * =============================================================================
+ *
+ * | EEG Band      | Effect     | Threshold Type | Threshold Value      | Notes                    |
+ * |---------------|------------|----------------|----------------------|--------------------------|
+ * | Alpha         | Chorus     | Adaptive       | alphaMean × 1.25     | Personalized baseline    |
+ * | Low Beta      | Flanger    | Fixed          | 0.3 (30% of signal)  | Same for all users       |
+ * | High Beta     | Reverb     | Fixed          | 0.3 (30% of signal)  | Same for all users       |
+ * | Theta         | Delay      | Fixed          | 0.3 (30% of signal)  | Same for all users       |
+ * | Gamma         | Distortion | Adaptive       | gammaMean × 1.25     | Inverted: low = high     |
+ *
+ * FIXED THRESHOLDS:
+ * - Use default midpoint (0.3) for all users
+ * - Effect activates when band is >30% of total signal
+ *
+ * ADAPTIVE THRESHOLDS:
+ * - Learn your personal baseline over the session
+ * - Threshold = personal_average × 1.25 (25% above baseline)
+ * - Better for individual differences in Alpha/Gamma
+ *
+ * INVERTED (Gamma/Distortion):
+ * - Output = 1 - sigmoid(gamma)
+ * - Low gamma → high distortion
+ * - High gamma → low distortion
+ *
+ * =============================================================================
+ * EEG FREQUENCY BANDS (from Muse)
+ * =============================================================================
+ * - Alpha (8-12 Hz): Relaxed, calm, awake but eyes closed
+ * - Low Beta (12-15 Hz): Relaxed focus, light concentration
+ * - High Beta (15-30 Hz): Active thinking, problem solving
+ * - Theta (4-8 Hz): Deep relaxation, meditation, drowsiness
+ * - Gamma (30+ Hz): High-level cognition, peak focus
  */
 
-// Configuration constants
-const STEEP = 60; // larger values for steeper sigmoid transition
-const midpoint = 0.3; // threshold for effect activation (adjust based on your baseline EEG)
-const threshold = 1.25; // multiplier for adaptive thresholding
+// =============================================================================
+// CONFIGURATION - EDIT THESE VALUES TO TUNE BEHAVIOR
+// =============================================================================
+
+const CONFIG = {
+  // Sigmoid parameters for threshold activation
+  sigmoid: {
+    steepness: 60,      // Higher = sharper on/off transition (try 30-100)
+    fixedMidpoint: 0.3  // Fixed threshold for non-adaptive effects (try 0.2-0.4)
+  },
+
+  // Adaptive thresholding multiplier
+  adaptive: {
+    multiplier: 1.25    // Threshold = baseline × this (try 1.1-1.5)
+  },
+
+  // EEG band to audio effect mappings
+  // Change these to remap which band controls which effect
+  mappings: {
+    "Alpha": {
+      effect: "Chorus",
+      adaptive: true,   // Use personalized threshold
+      invert: false     // Normal behavior (high input = high output)
+    },
+    "Low Beta": {
+      effect: "Flanger",
+      adaptive: false,  // Use fixed threshold
+      invert: false
+    },
+    "High Beta": {
+      effect: "Reverb",
+      adaptive: false,
+      invert: false
+    },
+    "Theta": {
+      effect: "Delay",
+      adaptive: false,
+      invert: false
+    },
+    "Gamma": {
+      effect: "Distortion",
+      adaptive: true,
+      invert: true      // Low gamma = high distortion
+    }
+  }
+};
+
+// Legacy constants for backward compatibility (derived from CONFIG)
+const STEEP = CONFIG.sigmoid.steepness;
+const midpoint = CONFIG.sigmoid.fixedMidpoint;
+const threshold = CONFIG.adaptive.multiplier;
 
 // UI elements
 let micSelect;
