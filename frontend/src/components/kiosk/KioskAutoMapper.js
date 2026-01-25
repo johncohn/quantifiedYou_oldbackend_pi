@@ -41,12 +41,20 @@ function normalizeValue(value, min, max) {
 
 export function KioskAutoMapper() {
   const dispatch = useDispatch();
-  const params = useSelector((state) => state.params);
   const dataStream = useSelector((state) => state.dataStream);
   const update = useSelector((state) => state.update);
 
   // Track min/max for adaptive normalization
   const rangesRef = useRef({});
+
+  // Store param names in a ref to avoid re-render loop
+  const paramNamesRef = useRef([]);
+  const params = useSelector((state) => state.params);
+
+  // Update param names ref when params change (but don't trigger effect)
+  useEffect(() => {
+    paramNamesRef.current = Object.keys(params);
+  }, [params]);
 
   useEffect(() => {
     // Only process when there's a stream update
@@ -63,7 +71,7 @@ export function KioskAutoMapper() {
     if (!museData) return;
 
     // For each visualization parameter, try to map from Muse data
-    Object.keys(params).forEach(paramName => {
+    paramNamesRef.current.forEach(paramName => {
       const museKey = PARAM_TO_MUSE_MAP[paramName];
       if (!museKey) return;
 
@@ -111,7 +119,7 @@ export function KioskAutoMapper() {
         },
       });
     });
-  }, [update, dataStream, params, dispatch]);
+  }, [update, dataStream, dispatch]);
 
   // Log status periodically
   useEffect(() => {
