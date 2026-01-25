@@ -1,0 +1,21 @@
+[Unit]
+Description=Headless Muse Bluetooth Service
+After=bluetooth.target network.target
+Wants=bluetooth.target
+
+[Service]
+Type=simple
+User=xenbox
+Group=xenbox
+WorkingDirectory=/home/xenbox/quantifiedYou_oldbackend_pi/scripts
+ExecStart=/usr/bin/python3 /home/xenbox/quantifiedYou_oldbackend_pi/scripts/muse_headless.py
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+# Bluetooth permissions
+AmbientCapabilities=CAP_NET_RAW CAP_NET_ADMIN
+
+[Install]
+WantedBy=multi-user.target
