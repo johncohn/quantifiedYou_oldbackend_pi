@@ -6,11 +6,13 @@
  * - Auto-reconnect on disconnect with exponential backoff
  * - WebSocket status reporting to LED controller
  * - Event-based status updates
+ * - PPG-based "headset worn" detection via heart rate
  */
 
 import { MuseClient } from "muse-js";
 import store from "../store/store";
 import { fft } from "mathjs";
+import { PolynomialRegression } from "ml-regression-polynomial";
 
 // Connection states
 export const ConnectionState = {
@@ -50,6 +52,18 @@ class KioskMuseManager {
     this.deviceId = null;
 
     this.channelNames = { 0: "TP9", 1: "AF7", 2: "AF8", 3: "TP10" };
+
+    // PPG processing for heart rate / worn detection
+    this.PPG_WINDOW_SIZE = 10;  // seconds
+    this.ppg_sfreq = 64;
+    this.HR_SFREQ = 1;  // Calculate HR once per second
+    this.ppgBuffer = new Array(this.PPG_WINDOW_SIZE * this.ppg_sfreq).fill(0);
+    this.ppgMetricStream = null;
+
+    // Headset worn state (based on valid heart rate)
+    this.heartRate = 0;
+    this.isWorn = false;
+    this.wornListeners = new Set();
 
     // Connect to LED status WebSocket
     this._connectStatusSocket();
@@ -120,6 +134,24 @@ class KioskMuseManager {
 
   _notifyListeners() {
     this.listeners.forEach(cb => cb(this.state, this.device?.name));
+  }
+
+  // Worn state listeners
+  onWornStateChange(callback) {
+    this.wornListeners.add(callback);
+    return () => this.wornListeners.delete(callback);
+  }
+
+  _notifyWornListeners() {
+    this.wornListeners.forEach(cb => cb(this.isWorn, this.heartRate));
+  }
+
+  getIsWorn() {
+    return this.isWorn;
+  }
+
+  getHeartRate() {
+    return this.heartRate;
   }
 
   /**
@@ -282,7 +314,7 @@ class KioskMuseManager {
 
       // Create Muse client and connect
       this.muse = new MuseClient();
-      this.muse.enablePpg = false; // Disable PPG for faster connection
+      this.muse.enablePpg = true; // Enable PPG for heart rate / worn detection
 
       // Connect muse-js to the GATT server
       await this.muse.connect(server);
@@ -301,7 +333,9 @@ class KioskMuseManager {
             id: this.deviceId,
             sampling_rate: {
               EEG: this.sfreq,
+              PPG: this.ppg_sfreq,
               "Band Powers": this.BAND_POWERS_SFREQ,
+              HR: this.HR_SFREQ,
             },
             type: "kiosk",
           },
@@ -376,21 +410,41 @@ class KioskMuseManager {
       }
     });
 
-    // Start band power calculations
+    // Subscribe to PPG readings for heart rate / worn detection
+    this.muse.ppgReadings.subscribe((ppgReading) => {
+      // PPG channel 2 is the infrared channel (best for heart rate)
+      if (ppgReading.ppgChannel === 2) {
+        this.ppgBuffer.splice(0, ppgReading.samples.length);
+        this.ppgBuffer.push(...ppgReading.samples);
+      }
+    });
+
+    // Start band power and heart rate calculations
     this._startMetricStream();
-    this.log('EEG streaming started');
+    this.log('EEG and PPG streaming started');
   }
 
   _startMetricStream() {
     if (this.eegMetricStream) {
       clearInterval(this.eegMetricStream);
     }
+    if (this.ppgMetricStream) {
+      clearInterval(this.ppgMetricStream);
+    }
 
+    // EEG band power calculation (10 Hz)
     this.eegMetricStream = setInterval(() => {
       if (this.state === ConnectionState.STREAMING) {
         this._calculateBandPowers();
       }
     }, (1 / this.BAND_POWERS_SFREQ) * 1000);
+
+    // PPG heart rate calculation (1 Hz)
+    this.ppgMetricStream = setInterval(() => {
+      if (this.state === ConnectionState.STREAMING) {
+        this._calculateHeartRate();
+      }
+    }, (1 / this.HR_SFREQ) * 1000);
   }
 
   _calculateBandPowers() {
@@ -455,6 +509,173 @@ class KioskMuseManager {
     return arr.reduce((a, b) => (isNaN(a) ? 0 : a) + (isNaN(b) ? 0 : b), 0) / arr.length;
   }
 
+  _calculateHeartRate() {
+    try {
+      // FIR lowpass filter coefficients
+      const coeffs = [
+        -0.00588043, -0.00620177, -0.00106799, 0.02467073, 0.07864882, 0.15035629,
+        0.21289894, 0.23779528, 0.21289894, 0.15035629, 0.07864882, 0.02467073,
+        -0.00106799, -0.00620177, -0.00588043,
+      ];
+
+      const ppg_fs = this.ppg_sfreq;
+      const ppg_time = [];
+      const length = this.ppgBuffer.length;
+
+      for (let i = 0; i < length; i++) {
+        ppg_time.push(i / ppg_fs);
+      }
+
+      // Filter the PPG signal
+      const filtered_signal = this._filtfilt(coeffs, [1.0], this.ppgBuffer);
+      const normalized_signal = this._normalizeArray(filtered_signal, ppg_time);
+
+      // Find peaks using adaptive threshold
+      const { peak_locs } = this._adaptiveThreshold(normalized_signal, ppg_fs);
+
+      // Calculate heart rate from peaks
+      const hr = this._getHeartRateFromPeaks(peak_locs, ppg_fs);
+
+      // Update worn state based on valid heart rate
+      const previousWorn = this.isWorn;
+      this.heartRate = hr;
+      this.isWorn = hr >= 40 && hr <= 200;  // Valid HR range
+
+      // Log state changes
+      if (previousWorn !== this.isWorn) {
+        this.log(`Worn state changed: ${this.isWorn ? 'WORN' : 'NOT WORN'} (HR: ${hr})`);
+        this._notifyWornListeners();
+      }
+
+      // Dispatch to Redux store
+      store.dispatch({
+        type: "devices/streamUpdate",
+        payload: {
+          id: this.deviceId,
+          data: {
+            HR: hr,
+            isWorn: this.isWorn
+          },
+          modality: "HR",
+        },
+      });
+
+    } catch (err) {
+      // PPG calculation can fail with insufficient data
+      this.heartRate = 0;
+      this.isWorn = false;
+    }
+  }
+
+  _filtfilt(b, a, x) {
+    // Normalize filter coefficients
+    if (a[0] !== 1) {
+      b = b.map((coef) => coef / a[0]);
+      a = a.map((coef) => coef / a[0]);
+    }
+
+    const padlen = 3 * Math.max(a.length, b.length);
+    if (padlen >= x.length - 1) {
+      return x; // Not enough data
+    }
+
+    // Odd padding
+    const edge_left = x[0];
+    const edge_right = x[x.length - 1];
+    const pad_left = x.slice(1, padlen + 1).reverse().map((v) => 2 * edge_left - v);
+    const pad_right = x.slice(x.length - padlen - 1, x.length - 1).reverse().map((v) => 2 * edge_right - v);
+    let x_padded = pad_left.concat(x).concat(pad_right);
+
+    // Forward-backward filter
+    const lfilter = (b, a, x) => {
+      const y = new Array(x.length);
+      const b_coeffs = b.slice(1);
+      const a_coeffs = a.slice(1);
+
+      for (let i = 0; i < x.length; i++) {
+        y[i] = b[0] * x[i];
+        for (let j = 0; j < b_coeffs.length; j++) {
+          if (i - j - 1 >= 0) y[i] += b_coeffs[j] * x[i - j - 1];
+        }
+        for (let j = 0; j < a_coeffs.length; j++) {
+          if (i - j - 1 >= 0) y[i] -= a_coeffs[j] * y[i - j - 1];
+        }
+      }
+      return y;
+    };
+
+    let y = lfilter(b, a, x_padded);
+    y = y.reverse();
+    y = lfilter(b, a, y);
+    y = y.reverse();
+
+    return y.slice(padlen, y.length - padlen);
+  }
+
+  _normalizeArray(arr, time) {
+    try {
+      const regression = new PolynomialRegression(time, arr, 6);
+      const trend = time.map((t) => regression.predict(t));
+      const normArr = arr.map((val, idx) => val - trend[idx]);
+      const min = Math.min(...normArr);
+      const max = Math.max(...normArr);
+      if (max === min) return arr.map(() => 0.5);
+      return normArr.map((val) => (val - min) / (max - min));
+    } catch (e) {
+      return arr;
+    }
+  }
+
+  _adaptiveThreshold(arr, sfreq) {
+    let x = new Array(arr.length).fill(0);
+    x[0] = Math.max(...arr) * 0.2;
+    const std = this._stdDev(arr);
+    let peak_amps = [0];
+    let peak_locs = [0];
+
+    for (let i = 1; i < arr.length; i++) {
+      x[i] = x[i - 1] - 0.6 * Math.abs((peak_amps[peak_amps.length - 1] + std) / sfreq);
+      if (arr[i] > x[i]) {
+        if (peak_locs.length > 1) {
+          const peak_diff = peak_locs[peak_amps.length - 2] - peak_locs[peak_amps.length - 1];
+          if (peak_diff / sfreq < 0.6) {
+            x[i] = arr[i];
+          }
+        } else {
+          x[i] = arr[i];
+        }
+      } else {
+        if (x[i - 1] === arr[i - 1]) {
+          peak_amps.push(x[i - 1]);
+          peak_locs.push(i - 1);
+        }
+      }
+    }
+    return { x, peak_amps, peak_locs };
+  }
+
+  _stdDev(arr) {
+    const n = arr.length;
+    const mean = arr.reduce((acc, val) => acc + val, 0) / n;
+    const variance = arr.reduce((acc, val) => acc + Math.pow(val - mean, 2), 0) / n;
+    return Math.sqrt(variance);
+  }
+
+  _getHeartRateFromPeaks(peakLocs, ppgFs) {
+    if (peakLocs.length < 3) return 0;
+
+    let heartRates = [];
+    for (let i = 1; i < peakLocs.length - 1; i++) {
+      let hr = 60 / ((peakLocs[i + 1] - peakLocs[i]) / ppgFs);
+      if (hr >= 30 && hr <= 220) {
+        heartRates.push(hr);
+      }
+    }
+
+    if (heartRates.length === 0) return 0;
+    return Math.floor(this._average(heartRates));
+  }
+
   _handleDisconnect() {
     if (this.state === ConnectionState.RECONNECTING) {
       return; // Already handling
@@ -463,11 +684,20 @@ class KioskMuseManager {
     this.log('Handling disconnect...');
     this.setState(ConnectionState.RECONNECTING);
 
-    // Stop metric stream
+    // Stop metric streams
     if (this.eegMetricStream) {
       clearInterval(this.eegMetricStream);
       this.eegMetricStream = null;
     }
+    if (this.ppgMetricStream) {
+      clearInterval(this.ppgMetricStream);
+      this.ppgMetricStream = null;
+    }
+
+    // Reset worn state
+    this.isWorn = false;
+    this.heartRate = 0;
+    this._notifyWornListeners();
 
     // Update Redux store
     if (this.deviceId) {
@@ -541,6 +771,11 @@ class KioskMuseManager {
 
     clearTimeout(this.reconnectTimer);
     clearInterval(this.eegMetricStream);
+    clearInterval(this.ppgMetricStream);
+
+    // Reset worn state
+    this.isWorn = false;
+    this.heartRate = 0;
 
     if (this.muse) {
       try {

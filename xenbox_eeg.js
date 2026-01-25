@@ -198,6 +198,10 @@ let eegDisplayValues = {
   gamma: 0
 };
 
+// Heart rate and worn detection
+let heartRate = 0;
+let isWorn = false;
+
 // UI elements
 let micSelect;
 let userMic;
@@ -494,6 +498,10 @@ function draw() {
   const theta = isFinite(Number(data?.["Theta"])) ? Number(data["Theta"]) : 0;
   const gamma = isFinite(Number(data?.["Gamma"])) ? Number(data["Gamma"]) : 0;
 
+  // Extract heart rate and worn state (from PPG)
+  heartRate = isFinite(Number(data?.["HR"])) ? Number(data["HR"]) : 0;
+  isWorn = data?.["isWorn"] === true || (heartRate >= 40 && heartRate <= 200);
+
   // Weighted aggregate = sum of all parameter values (slider-scaled data)
   const weighted = alpha + lowBeta + highBeta + theta + gamma;
 
@@ -562,12 +570,20 @@ function draw() {
   // MIDI status
   fill(midiEnabled ? [0, 128, 0] : [128, 0, 0]);
   text(midiStatusText, 280, 35);
+  // Heart rate and worn status
+  if (isWorn) {
+    fill(0, 150, 0);  // Green when worn
+    text(`HR: ${heartRate} BPM - HEADSET WORN`, 480, 20);
+  } else {
+    fill(200, 0, 0);  // Red when not worn
+    text(`HR: ${heartRate || '--'} BPM - NOT WORN (MIDI suppressed)`, 480, 20);
+  }
   pop();
 
   // Console logging - log every second (60 frames at 60fps)
   if (frameCount % 60 === 0) {
     const hasData = weighted > 0;
-    console.log(`[XENBOX] Alpha:${nf(alpha_rel,1,3)} Beta:${nf(lowBeta_rel,1,3)} Chorus:${nf(chorus_wetVal,1,2)} MIDI:${midiEnabled?'ON':'OFF'} Data:${hasData?'YES':'NO'}`);
+    console.log(`[XENBOX] Alpha:${nf(alpha_rel,1,3)} Chorus:${nf(chorus_wetVal,1,2)} HR:${heartRate} Worn:${isWorn?'YES':'NO'} MIDI:${midiEnabled&&isWorn?'ON':'SUPPRESSED'}`);
   }
 
   // Draw signal plots
@@ -577,11 +593,15 @@ function draw() {
   drawMIDIHistogram();
 
   // Apply effect modulations
+  // MIDI is suppressed when headset is not worn (no valid heart rate)
   if (checkboxes["Chorus"].checked()) {
-    chorus.wet.value = chorus_wetVal;
-    // Send to Bela via MIDI CC4 (mix)
-    if (midiEnabled) {
+    chorus.wet.value = isWorn ? chorus_wetVal : 0;
+    // Send to Bela via MIDI CC4 (mix) - only if worn
+    if (midiEnabled && isWorn) {
       sendMIDICCThrottled(MIDI_CONFIG.cc.mix, chorus_wetVal * 127);
+    } else if (midiEnabled && !isWorn) {
+      // Send zero when not worn to mute effect
+      sendMIDICCThrottled(MIDI_CONFIG.cc.mix, 0);
     }
   } else {
     chorus.wet.value = 0;

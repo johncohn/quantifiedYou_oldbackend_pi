@@ -11,6 +11,8 @@
  * - "High Beta" param <- Muse "High beta" band power
  * - "Theta" param <- Muse "Theta" band power
  * - "Gamma" param <- Muse "Gamma" band power
+ * - "HR" param <- Heart rate from PPG (raw BPM value)
+ * - "isWorn" param <- Boolean headset worn detection
  */
 
 import { useEffect, useRef } from 'react';
@@ -130,6 +132,28 @@ export function KioskAutoMapper() {
         },
       });
     });
+
+    // Map HR and isWorn directly (no normalization needed)
+    // HR is passed as raw BPM value, isWorn as boolean
+    if (museData.HR !== undefined) {
+      dispatch({
+        type: 'params/update',
+        payload: {
+          name: 'HR',
+          value: museData.HR,
+        },
+      });
+    }
+
+    if (museData.isWorn !== undefined) {
+      dispatch({
+        type: 'params/update',
+        payload: {
+          name: 'isWorn',
+          value: museData.isWorn,
+        },
+      });
+    }
   }, [update, dataStream, dispatch]);
 
   // Log status periodically
@@ -141,9 +165,10 @@ export function KioskAutoMapper() {
 
       if (museDeviceId && dataStream[museDeviceId]) {
         const data = dataStream[museDeviceId];
-        console.log(`[AUTOMAPPER] Muse data: Alpha=${data.Alpha?.toFixed(3) || 'N/A'} ` +
-          `Theta=${data.Theta?.toFixed(3) || 'N/A'} ` +
-          `Gamma=${data.Gamma?.toFixed(3) || 'N/A'}`);
+        const hrStr = data.HR !== undefined ? `${data.HR} BPM` : 'N/A';
+        const wornStr = data.isWorn !== undefined ? (data.isWorn ? 'YES' : 'NO') : 'N/A';
+        console.log(`[AUTOMAPPER] Muse: Alpha=${data.Alpha?.toFixed(3) || 'N/A'} ` +
+          `HR=${hrStr} Worn=${wornStr}`);
       }
     }, 5000);
 
