@@ -4,5 +4,7 @@
     "-dacChannels", "2",
     "-adcChannels", "2",
     "-channel", "2"
-  ]
+  ],
+  "midiInPort": "hw:0,0,0",
+  "midiOutPort": "hw:0,0,0"
 }

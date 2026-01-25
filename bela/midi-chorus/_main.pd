@@ -143,11 +143,11 @@
 #X msg 700 280 1;
 #X obj 700 300 s master-gain;
 #X obj 700 340 loadbang;
-#X msg 700 360 1;
+#X msg 700 360 0;
 #X obj 700 380 s sweep-enable;
 #X text 780 200 Default delay 3.5ms;
 #X text 780 280 Default gain 1.0;
-#X text 780 360 Sweep ON at start;
+#X text 780 360 Sweep OFF at start;
 #X text 10 50 === MIDI CC ===;
 #X text 10 70 CC1:Rate CC2:Depth CC3:Feedback;
 #X text 10 90 CC4:Mix CC5:Gain CC6:SweepToggle;
