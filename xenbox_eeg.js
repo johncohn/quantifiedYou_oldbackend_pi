@@ -90,13 +90,13 @@
 const CONFIG = {
   // Sigmoid parameters for threshold activation
   sigmoid: {
-    steepness: 10,      // Higher = sharper on/off transition (try 30-100)
+    steepness: 4,       // Lower = smoother transition (was 10, now 4 for more responsiveness)
     fixedMidpoint: 0.3  // Fixed threshold for non-adaptive effects (try 0.2-0.4)
   },
 
   // Adaptive thresholding multiplier
   adaptive: {
-    multiplier: 0.9     // Threshold = baseline × this (try 0.8-1.2)
+    multiplier: 0.5     // Threshold = baseline × this (was 0.9, now 0.5 for easier activation)
   },
 
   // EEG band to audio effect mappings
