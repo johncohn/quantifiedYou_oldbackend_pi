@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=YouQuantified Kiosk
+Comment=Launch YouQuantified visualization in kiosk mode
+Exec=/home/xenbox/start-kiosk.sh
+Terminal=false
+Hidden=false
+X-GNOME-Autostart-enabled=true

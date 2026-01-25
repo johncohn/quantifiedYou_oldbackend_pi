@@ -29,6 +29,18 @@ import type { Lists, UserWhereUniqueInput } from ".keystone/types";
 
 function getVisualFilterQuery(session: any) {
   if (session?.data.isAdmin) return true;
+
+  // Allow unauthenticated access to kiosk visualization and public visuals
+  if (!session) {
+    return {
+      OR: [
+        { privacy: { equals: "public" } },
+        // Allow specific kiosk visualization (set via KIOSK_VIS_ID env var)
+        ...(process.env.KIOSK_VIS_ID ? [{ id: { equals: process.env.KIOSK_VIS_ID } }] : []),
+      ],
+    };
+  }
+
   return {
     OR: [
       // You're the author

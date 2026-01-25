@@ -224,17 +224,19 @@ function sigmoid(x, k = STEEP, m = midpoint) {
 // =============================================================================
 
 async function initMIDI() {
+  console.log("[MIDI] Initializing MIDI output...");
   try {
     const midiAccess = await navigator.requestMIDIAccess();
+    console.log(`[MIDI] Found ${midiAccess.outputs.size} MIDI output(s)`);
 
     // Find Bela output
     for (const output of midiAccess.outputs.values()) {
-      console.log("MIDI Output found:", output.name);
+      console.log(`[MIDI] Output available: "${output.name}"`);
       if (output.name.toLowerCase().includes(MIDI_CONFIG.outputName.toLowerCase())) {
         midiOutput = output;
         midiEnabled = true;
         midiStatusText = `MIDI: Connected to ${output.name}`;
-        console.log("Connected to MIDI output:", output.name);
+        console.log(`[MIDI] Connected to: ${output.name}`);
 
         // Send fixed Tone.js-matching values on connect
         setTimeout(() => {
@@ -275,6 +277,11 @@ function sendMIDICC(cc, value) {
   // Status = 0xB0 + channel for CC messages
   const status = 0xB0 + MIDI_CONFIG.channel;
   midiOutput.send([status, cc, midiValue]);
+
+  // Log MIDI sends (throttled by caller)
+  if (cc === MIDI_CONFIG.cc.mix) {
+    console.log(`[MIDI] CC${cc}=${midiValue} (mix=${(value/127).toFixed(2)})`);
+  }
 }
 
 function sendMIDICCThrottled(cc, value) {
@@ -470,6 +477,12 @@ function draw() {
   fill(midiEnabled ? [0, 128, 0] : [128, 0, 0]);
   text(midiStatusText, 20, 260);
   pop();
+
+  // Console logging - log every second (60 frames at 60fps)
+  if (frameCount % 60 === 0) {
+    const hasData = weighted > 0;
+    console.log(`[XENBOX] Alpha:${nf(alpha_rel,1,3)} Beta:${nf(lowBeta_rel,1,3)} Chorus:${nf(chorus_wetVal,1,2)} MIDI:${midiEnabled?'ON':'OFF'} Data:${hasData?'YES':'NO'}`);
+  }
 
   // Draw signal plots
   drawSignalPlots();

@@ -3,7 +3,7 @@ import React, { useState, createContext, useEffect } from "react";
 import { QueryMainView } from "./components/visuals/dashboard/main";
 import { MainMenu } from "./components/visuals/menu/menu";
 import { DevicesManager } from "./components/devices/main";
-import { Routes, Route, NavLink } from "react-router-dom";
+import { Routes, Route, NavLink, useLocation } from "react-router-dom";
 import { isMobile } from "react-device-detect";
 import MobileUnavaiabilityScreen from "./components/mobile";
 import HomePage from "./components/home/main";
@@ -16,6 +16,7 @@ import { AINewVisual } from "./components/visuals/new-ai/main";
 import { useSelector } from "react-redux";
 import { stopRecording } from "./utility/recorder";
 import { User } from "./components/profile/main";
+import { KioskView } from "./components/kiosk/KioskView";
 import { MyUserName } from "./components/visuals/menu/username";
 
 function NavBar({ setShowDevices, recording, setRecording }) {
@@ -85,12 +86,31 @@ function DesktopApp() {
   );
 }
 
-export default function App() {
+// Wrapper component to handle kiosk route detection
+function AppContent() {
+  const location = useLocation();
+  const isKioskMode = location.pathname.startsWith('/kiosk');
+
+  // Kiosk mode: full-screen, no navbar, bypasses mobile check
+  if (isKioskMode) {
+    return (
+      <Routes>
+        <Route path="/kiosk/:visID" element={<KioskView />} />
+      </Routes>
+    );
+  }
+
+  // Normal mode: standard app with navbar
   const renderedContent = isMobile ? (
     <MobileUnavaiabilityScreen />
   ) : (
     <DesktopApp />
   );
+
+  return renderedContent;
+}
+
+export default function App() {
   const { data, loading, error } = useQuery(AUTH_USER);
 
   const [currentUser, setCurrentUser] = useState(data?.authenticatedItem);
@@ -103,7 +123,7 @@ export default function App() {
 
   return (
     <UserContext.Provider value={{ currentUser, setCurrentUser }}>
-      {renderedContent}
+      <AppContent />
     </UserContext.Provider>
   );
 }

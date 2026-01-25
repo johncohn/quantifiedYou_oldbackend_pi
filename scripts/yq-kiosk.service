@@ -1,0 +1,22 @@
+[Unit]
+Description=YouQuantified Kiosk Mode
+Documentation=https://github.com/youquantified
+After=graphical-session.target network-online.target yq-backend.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=xenbox
+Group=xenbox
+Environment=DISPLAY=:0
+Environment=XAUTHORITY=/home/xenbox/.Xauthority
+WorkingDirectory=/home/xenbox
+ExecStartPre=/bin/sleep 10
+ExecStart=/home/xenbox/start-kiosk.sh
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=graphical-session.target

@@ -1,0 +1,21 @@
+[Unit]
+Description=YouQuantified LED Status Controller
+Documentation=https://github.com/youquantified
+After=network.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/home/xenbox/quantifiedYou_oldbackend_pi/scripts
+ExecStart=/usr/bin/python3 /home/xenbox/quantifiedYou_oldbackend_pi/scripts/led_status_controller.py
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+# Environment
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target
