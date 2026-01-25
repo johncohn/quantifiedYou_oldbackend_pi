@@ -316,9 +316,11 @@ function setup() {
   });
 
   // Checkboxes for effects
+  // Chorus is enabled by default for kiosk mode
   let y = 60;
   for (let name of effectNames) {
-    const checkbox = createCheckbox(name, false);
+    const defaultOn = (name === "Chorus");  // Chorus on by default
+    const checkbox = createCheckbox(name, defaultOn);
     checkbox.position(20, y);
     checkbox.changed(() => updateWetValues());
     checkboxes[name] = checkbox;
