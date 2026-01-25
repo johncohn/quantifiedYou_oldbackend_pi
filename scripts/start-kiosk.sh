@@ -41,15 +41,17 @@ done
 log "Backend service ready (waited ${WAITED}s)"
 
 # Kill any existing Chromium instances
-pkill -f chromium-browser || true
+pkill -f chromium || true
 sleep 2
 
 log "Launching Chromium in kiosk mode..."
 log "URL: $KIOSK_URL"
 
 # Launch Chromium with kiosk flags
+# --password-store=basic prevents keyring password prompt
 # --enable-features=WebBluetoothNewPermissionsBackend enables persistent Bluetooth pairing
-chromium-browser \
+chromium \
+    --password-store=basic \
     --kiosk \
     --noerrdialogs \
     --disable-infobars \

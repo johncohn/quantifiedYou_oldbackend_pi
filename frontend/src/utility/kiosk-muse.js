@@ -125,8 +125,9 @@ class KioskMuseManager {
   /**
    * Try to reconnect to a previously paired device (no user gesture needed!)
    * Uses the Web Bluetooth getDevices() API
+   * Retries several times since Bluetooth may not be ready right after boot
    */
-  async tryAutoConnect() {
+  async tryAutoConnect(maxAttempts = 5) {
     this.log('Attempting auto-connect to previously paired device...');
     this.setState(ConnectionState.SEARCHING);
 
@@ -163,8 +164,31 @@ class KioskMuseManager {
         this._handleDisconnect();
       });
 
-      // Try to connect
-      return await this._connectToDevice();
+      // Try to connect with retries (Bluetooth may not be ready right after boot)
+      for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        this.log(`Auto-connect attempt ${attempt}/${maxAttempts}...`);
+
+        try {
+          const success = await this._connectToDevice();
+          if (success) {
+            return true;
+          }
+        } catch (err) {
+          this.log(`Attempt ${attempt} failed: ${err.message}`);
+        }
+
+        if (attempt < maxAttempts) {
+          // Wait before retry (increasing delay)
+          const delay = attempt * 2000;
+          this.log(`Waiting ${delay}ms before retry...`);
+          this.setState(ConnectionState.RECONNECTING);
+          await new Promise(resolve => setTimeout(resolve, delay));
+        }
+      }
+
+      this.log('Auto-connect failed after all attempts');
+      this.setState(ConnectionState.IDLE);
+      return false;
 
     } catch (err) {
       this.log(`Auto-connect failed: ${err.message}`);
