@@ -189,6 +189,15 @@ let midiValueHistory = {
 };
 const MIDI_HISTORY_LENGTH = 50;
 
+// EEG values for histogram display (normalized 0-1)
+let eegDisplayValues = {
+  alpha: 0,
+  theta: 0,
+  lowBeta: 0,
+  highBeta: 0,
+  gamma: 0
+};
+
 // UI elements
 let micSelect;
 let userMic;
@@ -351,7 +360,8 @@ function sendMIDICCThrottled(cc, value) {
 }
 
 function setup() {
-  createCanvas(800, 600);
+  // Fill most of the window
+  createCanvas(windowWidth - 20, windowHeight - 20);
   textAlign(CENTER, CENTER);
   textSize(14);
 
@@ -497,6 +507,13 @@ function draw() {
   const theta_rel = divideIfNotZero(theta, sum);
   const gamma_rel = divideIfNotZero(gamma, sum);
 
+  // Store EEG values for histogram display
+  eegDisplayValues.alpha = alpha_rel;
+  eegDisplayValues.theta = theta_rel;
+  eegDisplayValues.lowBeta = lowBeta_rel;
+  eegDisplayValues.highBeta = highBeta_rel;
+  eegDisplayValues.gamma = gamma_rel;
+
   // Update running statistics for adaptive thresholding
   alphaN += 1;
   alphaMean += (alpha_rel - alphaMean) / alphaN;
@@ -504,8 +521,18 @@ function draw() {
   gammaN += 1;
   gammaMean += (gamma_rel - gammaMean) / gammaN;
 
-  // Calculate effect wet values using sigmoid on relative values
-  const chorus_wetVal = sigmoid(alpha_rel, STEEP, alphaMean * threshold);
+  // Calculate effect wet values
+  // Chorus: Use SIGMOID centered on personal baseline for smooth transitions
+  // - Amplify deviation from mean before feeding to sigmoid
+  // - Sigmoid provides smooth S-curve (no clicks)
+  // - Sensitivity controls how much alpha change is needed for full swing
+  const alphaDeviation = alpha_rel - alphaMean;  // How far from personal baseline
+  const sensitivity = 8.0;  // Higher = more sensitive to small changes
+  const smoothness = 6.0;   // Sigmoid steepness (lower = smoother transition)
+  // Sigmoid centered at 0, so positive deviation -> high output, negative -> low
+  const chorus_wetVal = 1 / (1 + Math.exp(-smoothness * alphaDeviation * sensitivity));
+
+  // Other effects use sigmoid
   const flanger_wetVal = sigmoid(lowBeta_rel);
   const reverb_wetVal = sigmoid(highBeta_rel);
   const delay_feedback = sigmoid(theta_rel);
@@ -526,17 +553,15 @@ function draw() {
     }
   }
 
-  // Display statistics
+  // Display statistics (compact, above histogram)
   push();
   fill(0);
-  textSize(14);
+  textSize(12);
   textAlign(LEFT, TOP);
-  text(`Alpha Mean: ${nf(alphaMean, 1, 3)} | Chorus: ${nf(chorus_wetVal, 1, 2)}`, 20, 200);
-  text(`Gamma Mean: ${nf(gammaMean, 1, 3)} | Distortion: ${nf(distortion_wetVal, 1, 2)}`, 20, 220);
-  text(`Frame Rate: ${displayFPS} fps | Data Points: ${signalHistory["Alpha"].length}`, 20, 240);
+  text(`FPS: ${displayFPS} | Samples: ${signalHistory["Alpha"].length}`, 280, 20);
   // MIDI status
   fill(midiEnabled ? [0, 128, 0] : [128, 0, 0]);
-  text(midiStatusText, 20, 260);
+  text(midiStatusText, 280, 35);
   pop();
 
   // Console logging - log every second (60 frames at 60fps)
@@ -592,10 +617,11 @@ function draw() {
 }
 
 function drawSignalPlots() {
-  const plotX = 250;
-  const plotY = 250;
-  const plotWidth = 530;
-  const plotHeight = 320;
+  // Dynamic sizing based on canvas
+  const plotX = 280;
+  const plotY = 50;
+  const plotWidth = width - plotX - 20;
+  const plotHeight = height - plotY - 80;
   const plotPadding = 10;
 
   // Background for plot area
@@ -730,10 +756,11 @@ function drawSignalPlots() {
 
 function drawMIDIHistogram() {
   const histX = 20;
-  const histY = 300;
-  const histWidth = 210;
-  const histHeight = 280;
-  const barPadding = 8;
+  const histY = 200;
+  const histWidth = 240;
+  const histHeight = height - histY - 20;
+  const barPadding = 4;
+  const barHeight = 18;
 
   // Background
   push();
@@ -743,33 +770,84 @@ function drawMIDIHistogram() {
   rect(histX, histY, histWidth, histHeight, 5);
   pop();
 
-  // Title
+  // ========== EEG SECTION ==========
   push();
   fill(0);
-  textSize(12);
+  textSize(11);
   textAlign(CENTER, TOP);
-  text("MIDI Chorus Parameters", histX + histWidth / 2, histY + 5);
+  text("EEG Bands (Relative)", histX + histWidth / 2, histY + 5);
   pop();
 
-  // Parameters to display
-  const params = [
-    { name: "Mix (CC4)", value: midiValues.mix, color: [76, 175, 80], dynamic: true },
-    { name: "Rate", value: midiValues.rate, color: [33, 150, 243], dynamic: false },
-    { name: "Depth", value: midiValues.depth, color: [156, 39, 176], dynamic: false },
-    { name: "Feedback", value: midiValues.feedback, color: [255, 152, 0], dynamic: false },
-    { name: "Gain", value: midiValues.gain, color: [0, 188, 212], dynamic: false },
-    { name: "Sweep", value: midiValues.sweep, color: [244, 67, 54], dynamic: false }
+  // EEG parameters (0-1 scale, shown as percentage)
+  const eegParams = [
+    { name: "Alpha", value: eegDisplayValues.alpha, color: [255, 100, 100] },
+    { name: "Theta", value: eegDisplayValues.theta, color: [255, 200, 100] },
+    { name: "Low Beta", value: eegDisplayValues.lowBeta, color: [100, 255, 100] },
+    { name: "High Beta", value: eegDisplayValues.highBeta, color: [100, 100, 255] },
+    { name: "Gamma", value: eegDisplayValues.gamma, color: [200, 100, 255] }
   ];
 
-  const barHeight = 25;
-  const barMaxWidth = histWidth - 60;
-  let y = histY + 30;
+  const barMaxWidth = histWidth - 70;
+  let y = histY + 22;
 
-  for (let param of params) {
+  for (let param of eegParams) {
     // Label
     push();
     fill(0);
-    textSize(10);
+    textSize(9);
+    textAlign(LEFT, CENTER);
+    text(param.name, histX + 5, y + barHeight / 2);
+    pop();
+
+    // Bar background
+    push();
+    fill(200);
+    noStroke();
+    rect(histX + 55, y, barMaxWidth, barHeight, 3);
+    pop();
+
+    // Value bar (0-1 maps to full width)
+    const barWidth = Math.min(param.value, 1) * barMaxWidth;
+    push();
+    fill(param.color);
+    noStroke();
+    rect(histX + 55, y, barWidth, barHeight, 3);
+    pop();
+
+    // Value text (show as percentage)
+    push();
+    fill(0);
+    textSize(9);
+    textAlign(RIGHT, CENTER);
+    text((param.value * 100).toFixed(0) + "%", histX + histWidth - 5, y + barHeight / 2);
+    pop();
+
+    y += barHeight + barPadding;
+  }
+
+  // ========== MIDI SECTION ==========
+  y += 8;
+  push();
+  fill(0);
+  textSize(11);
+  textAlign(CENTER, TOP);
+  text("MIDI to Bela", histX + histWidth / 2, y);
+  pop();
+  y += 16;
+
+  // MIDI parameters (0-127 scale)
+  const midiParams = [
+    { name: "Mix", value: midiValues.mix, color: [76, 175, 80], dynamic: true },
+    { name: "Rate", value: midiValues.rate, color: [100, 100, 100], dynamic: false },
+    { name: "Depth", value: midiValues.depth, color: [100, 100, 100], dynamic: false },
+    { name: "Gain", value: midiValues.gain, color: [100, 100, 100], dynamic: false }
+  ];
+
+  for (let param of midiParams) {
+    // Label
+    push();
+    fill(0);
+    textSize(9);
     textAlign(LEFT, CENTER);
     text(param.name, histX + 5, y + barHeight / 2);
     pop();
@@ -791,33 +869,33 @@ function drawMIDIHistogram() {
 
     // Value text
     push();
-    fill(param.value > 60 ? 255 : 0);
-    textSize(10);
-    textAlign(CENTER, CENTER);
-    text(param.value, histX + 55 + barMaxWidth / 2, y + barHeight / 2);
+    fill(0);
+    textSize(9);
+    textAlign(RIGHT, CENTER);
+    text(param.value, histX + histWidth - 5, y + barHeight / 2);
     pop();
 
     y += barHeight + barPadding;
   }
 
-  // Draw mix history (mini waveform)
+  // ========== MIX HISTORY WAVEFORM ==========
   if (midiValueHistory.mix.length > 1) {
-    const waveY = y + 10;
-    const waveHeight = 40;
+    y += 5;
+    const waveHeight = 35;
 
     // Label
     push();
     fill(0);
-    textSize(10);
+    textSize(9);
     textAlign(LEFT, TOP);
-    text("Mix History:", histX + 5, waveY);
+    text("Mix History:", histX + 5, y);
     pop();
 
     // Waveform background
     push();
     fill(255);
     stroke(150);
-    rect(histX + 5, waveY + 15, histWidth - 10, waveHeight, 3);
+    rect(histX + 5, y + 12, histWidth - 10, waveHeight, 3);
     pop();
 
     // Draw waveform
@@ -829,10 +907,14 @@ function drawMIDIHistogram() {
     const history = midiValueHistory.mix;
     for (let i = 0; i < history.length; i++) {
       const x = histX + 5 + (i / (MIDI_HISTORY_LENGTH - 1)) * (histWidth - 10);
-      const yVal = waveY + 15 + waveHeight - (history[i] / 127) * waveHeight;
+      const yVal = y + 12 + waveHeight - (history[i] / 127) * waveHeight;
       vertex(x, yVal);
     }
     endShape();
     pop();
   }
+}
+
+function windowResized() {
+  resizeCanvas(windowWidth - 20, windowHeight - 20);
 }
