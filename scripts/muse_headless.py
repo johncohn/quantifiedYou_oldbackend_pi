@@ -108,6 +108,8 @@ class MuseHeadlessService:
 
         self.reconnect_delay = 5
         self.max_reconnect_delay = 30
+        self.sample_count = 0
+        self.last_log_time = 0
 
     async def scan_for_muse(self, timeout=15):
         """Scan for Muse devices"""
@@ -136,6 +138,7 @@ class MuseHeadlessService:
                 samples = decode_eeg_packet(bytes(data))
                 for sample in samples:
                     self.buffers[channel_idx].append(sample)
+                self.sample_count += len(samples)
             except Exception as e:
                 log.debug(f"Decode error ch{channel_idx}: {e}")
         return callback
@@ -175,20 +178,29 @@ class MuseHeadlessService:
                 except Exception as e:
                     log.error(f"Failed to subscribe to channel {idx}: {e}")
 
-            # Send start command
-            # 'd' = start data, 'v' = version, 'h' = halt
+            # Muse protocol: send commands to start streaming
+            # Order matters: preset first, then resume
             try:
+                # Request version (helps initialize some Muse models)
+                await self.client.write_gatt_char(CONTROL_CHAR, b'v1\n')
+                log.info("Sent version request")
+                await asyncio.sleep(0.5)
+
+                # Set preset (p20 = default, p21 = EEG-focused)
+                await self.client.write_gatt_char(CONTROL_CHAR, b'p20\n')
+                log.info("Sent preset p20")
+                await asyncio.sleep(0.5)
+
+                # Resume streaming
+                await self.client.write_gatt_char(CONTROL_CHAR, b's\n')
+                log.info("Sent resume command")
+                await asyncio.sleep(0.5)
+
+                # Start data
                 await self.client.write_gatt_char(CONTROL_CHAR, b'd\n')
                 log.info("Sent start command")
             except Exception as e:
-                log.warning(f"Start command failed (may be OK): {e}")
-
-            # Send preset command (p21 = EEG preset)
-            try:
-                await self.client.write_gatt_char(CONTROL_CHAR, b'p21\n')
-                log.info("Sent preset command")
-            except Exception as e:
-                log.warning(f"Preset command failed (may be OK): {e}")
+                log.warning(f"Command failed: {e}")
 
             # Reset reconnect delay on successful connection
             self.reconnect_delay = 5
@@ -315,12 +327,24 @@ class MuseHeadlessService:
 
     async def band_power_loop(self):
         """Periodically calculate and broadcast band powers"""
+        import time
         interval = 1.0 / BAND_POWERS_RATE
 
         while self.running:
             if self.connected:
                 try:
                     band_powers = self.calculate_band_powers()
+
+                    # Log status every 5 seconds regardless of data
+                    now = time.time()
+                    if now - self.last_log_time > 5:
+                        self.last_log_time = now
+                        if band_powers:
+                            alpha = band_powers.get('Alpha', 0)
+                            log.info(f"Data: samples={self.sample_count} Alpha={alpha:.4f} clients={len(self.clients)}")
+                        else:
+                            log.info(f"No band data yet: samples={self.sample_count} clients={len(self.clients)}")
+
                     if band_powers:
                         await self.broadcast_data(band_powers)
                 except Exception as e:

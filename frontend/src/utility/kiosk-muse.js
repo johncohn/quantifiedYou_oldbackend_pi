@@ -164,6 +164,41 @@ class KioskMuseManager {
         this._handleDisconnect();
       });
 
+      // CRITICAL: Watch for advertisements before connecting
+      // Web Bluetooth requires receiving an advertisement packet before auto-connect works
+      this.log('Watching for Muse advertisements...');
+
+      try {
+        // Start watching for advertisements from this device
+        const abortController = new AbortController();
+
+        const advertisementReceived = new Promise((resolve, reject) => {
+          const timeout = setTimeout(() => {
+            abortController.abort();
+            reject(new Error('No advertisement received within timeout'));
+          }, 30000); // 30 second timeout
+
+          this.device.addEventListener('advertisementreceived', (event) => {
+            clearTimeout(timeout);
+            this.log(`Advertisement received from ${event.device.name}, RSSI: ${event.rssi}`);
+            resolve(event);
+          }, { once: true });
+        });
+
+        await this.device.watchAdvertisements({ signal: abortController.signal });
+        this.log('Watching for advertisements...');
+
+        // Wait for advertisement
+        await advertisementReceived;
+        this.log('Advertisement received, now connecting...');
+
+        // Stop watching
+        abortController.abort();
+
+      } catch (err) {
+        this.log(`Advertisement watch failed: ${err.message}, trying direct connect...`);
+      }
+
       // Try to connect with retries (Bluetooth may not be ready right after boot)
       for (let attempt = 1; attempt <= maxAttempts; attempt++) {
         this.log(`Auto-connect attempt ${attempt}/${maxAttempts}...`);

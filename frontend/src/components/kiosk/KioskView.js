@@ -9,11 +9,11 @@
  * - Streams EEG data to visualization
  */
 
-import React, { useEffect, useRef, useState, useCallback } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 import { useQuery, gql } from "@apollo/client";
 import { useSelector, useDispatch } from "react-redux";
-import { HeadlessMuseReceiver } from "./HeadlessMuseReceiver";
+import { MuseConnectButton } from "./MuseConnectButton";
 import { KioskAutoMapper } from "./KioskAutoMapper";
 import { fetchCode } from "../visuals/utility/fetch_code";
 import { selectParamValues } from "../visuals/utility/selectors";
@@ -66,24 +66,6 @@ const styles = {
     textAlign: 'center',
     padding: '20px',
   },
-  statusIndicator: {
-    position: 'fixed',
-    top: '10px',
-    right: '10px',
-    padding: '8px 16px',
-    borderRadius: '20px',
-    fontSize: '14px',
-    fontFamily: 'system-ui, sans-serif',
-    zIndex: 1000,
-    display: 'flex',
-    alignItems: 'center',
-    gap: '8px',
-  },
-  statusDot: {
-    width: '10px',
-    height: '10px',
-    borderRadius: '50%',
-  },
 };
 
 export function KioskView() {
@@ -93,15 +75,6 @@ export function KioskView() {
 
   const [code, setCode] = useState(null);
   const [codeLoading, setCodeLoading] = useState(true);
-  const [museStatus, setMuseStatus] = useState({
-    wsConnected: false,
-    museConnected: false,
-    deviceName: null
-  });
-
-  const handleMuseStatusChange = useCallback((status) => {
-    setMuseStatus(status);
-  }, []);
 
   // Get visualization metadata
   const { loading, error, data } = useQuery(KIOSK_VISUAL, {
@@ -244,38 +217,13 @@ export function KioskView() {
     );
   }
 
-  // Determine status indicator color and text
-  const getStatusInfo = () => {
-    if (!museStatus.wsConnected) {
-      return { color: '#666', text: 'Service offline' };
-    }
-    if (museStatus.museConnected) {
-      return { color: '#4CAF50', text: museStatus.deviceName || 'Muse connected' };
-    }
-    return { color: '#FFC107', text: 'Searching for Muse...' };
-  };
-  const statusInfo = getStatusInfo();
-
   return (
     <div style={styles.container}>
-      {/* Headless Muse receiver - auto-connects, no user interaction needed */}
-      <HeadlessMuseReceiver onStatusChange={handleMuseStatusChange} />
-
       {/* Auto-map Muse data to visualization parameters */}
       <KioskAutoMapper />
 
-      {/* Status indicator (small, top-right corner) */}
-      <div style={{
-        ...styles.statusIndicator,
-        backgroundColor: 'rgba(0,0,0,0.7)',
-        color: 'white',
-      }}>
-        <div style={{
-          ...styles.statusDot,
-          backgroundColor: statusInfo.color,
-        }} />
-        {statusInfo.text}
-      </div>
+      {/* Muse connect button overlay - handles auto-connect on boot */}
+      <MuseConnectButton />
 
       {/* Full-screen visualization iframe */}
       <iframe
