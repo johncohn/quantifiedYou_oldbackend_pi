@@ -173,6 +173,22 @@ let midiEnabled = false;
 let lastMidiSendTime = 0;
 let midiStatusText = "MIDI: Not initialized";
 
+// MIDI parameter values for visualization (0-127 scale)
+let midiValues = {
+  mix: 0,
+  rate: 0,
+  depth: 0,
+  feedback: 0,
+  gain: 0,
+  sweep: 0
+};
+
+// History for animated bars (smooth transitions)
+let midiValueHistory = {
+  mix: []
+};
+const MIDI_HISTORY_LENGTH = 50;
+
 // UI elements
 let micSelect;
 let userMic;
@@ -306,9 +322,24 @@ function sendMIDICC(cc, value) {
   const status = 0xB0 + MIDI_CONFIG.channel;
   midiOutput.send([status, cc, midiValue]);
 
-  // Log MIDI sends (throttled by caller)
+  // Track values for visualization
   if (cc === MIDI_CONFIG.cc.mix) {
+    midiValues.mix = midiValue;
+    midiValueHistory.mix.push(midiValue);
+    if (midiValueHistory.mix.length > MIDI_HISTORY_LENGTH) {
+      midiValueHistory.mix.shift();
+    }
     console.log(`[MIDI] CC${cc}=${midiValue} (mix=${(value/127).toFixed(2)})`);
+  } else if (cc === MIDI_CONFIG.cc.rate) {
+    midiValues.rate = midiValue;
+  } else if (cc === MIDI_CONFIG.cc.depth) {
+    midiValues.depth = midiValue;
+  } else if (cc === MIDI_CONFIG.cc.feedback) {
+    midiValues.feedback = midiValue;
+  } else if (cc === MIDI_CONFIG.cc.gain) {
+    midiValues.gain = midiValue;
+  } else if (cc === MIDI_CONFIG.cc.sweep) {
+    midiValues.sweep = midiValue;
   }
 }
 
@@ -517,6 +548,9 @@ function draw() {
   // Draw signal plots
   drawSignalPlots();
 
+  // Draw MIDI parameter histogram
+  drawMIDIHistogram();
+
   // Apply effect modulations
   if (checkboxes["Chorus"].checked()) {
     chorus.wet.value = chorus_wetVal;
@@ -692,4 +726,113 @@ function drawSignalPlots() {
   textAlign(CENTER, TOP);
   text("EEG Signal Monitor (Relative Power)", plotX + plotWidth / 2, plotY - 25);
   pop();
+}
+
+function drawMIDIHistogram() {
+  const histX = 20;
+  const histY = 300;
+  const histWidth = 210;
+  const histHeight = 280;
+  const barPadding = 8;
+
+  // Background
+  push();
+  fill(240);
+  stroke(100);
+  strokeWeight(1);
+  rect(histX, histY, histWidth, histHeight, 5);
+  pop();
+
+  // Title
+  push();
+  fill(0);
+  textSize(12);
+  textAlign(CENTER, TOP);
+  text("MIDI Chorus Parameters", histX + histWidth / 2, histY + 5);
+  pop();
+
+  // Parameters to display
+  const params = [
+    { name: "Mix (CC4)", value: midiValues.mix, color: [76, 175, 80], dynamic: true },
+    { name: "Rate", value: midiValues.rate, color: [33, 150, 243], dynamic: false },
+    { name: "Depth", value: midiValues.depth, color: [156, 39, 176], dynamic: false },
+    { name: "Feedback", value: midiValues.feedback, color: [255, 152, 0], dynamic: false },
+    { name: "Gain", value: midiValues.gain, color: [0, 188, 212], dynamic: false },
+    { name: "Sweep", value: midiValues.sweep, color: [244, 67, 54], dynamic: false }
+  ];
+
+  const barHeight = 25;
+  const barMaxWidth = histWidth - 60;
+  let y = histY + 30;
+
+  for (let param of params) {
+    // Label
+    push();
+    fill(0);
+    textSize(10);
+    textAlign(LEFT, CENTER);
+    text(param.name, histX + 5, y + barHeight / 2);
+    pop();
+
+    // Bar background
+    push();
+    fill(200);
+    noStroke();
+    rect(histX + 55, y, barMaxWidth, barHeight, 3);
+    pop();
+
+    // Value bar
+    const barWidth = (param.value / 127) * barMaxWidth;
+    push();
+    fill(param.color);
+    noStroke();
+    rect(histX + 55, y, barWidth, barHeight, 3);
+    pop();
+
+    // Value text
+    push();
+    fill(param.value > 60 ? 255 : 0);
+    textSize(10);
+    textAlign(CENTER, CENTER);
+    text(param.value, histX + 55 + barMaxWidth / 2, y + barHeight / 2);
+    pop();
+
+    y += barHeight + barPadding;
+  }
+
+  // Draw mix history (mini waveform)
+  if (midiValueHistory.mix.length > 1) {
+    const waveY = y + 10;
+    const waveHeight = 40;
+
+    // Label
+    push();
+    fill(0);
+    textSize(10);
+    textAlign(LEFT, TOP);
+    text("Mix History:", histX + 5, waveY);
+    pop();
+
+    // Waveform background
+    push();
+    fill(255);
+    stroke(150);
+    rect(histX + 5, waveY + 15, histWidth - 10, waveHeight, 3);
+    pop();
+
+    // Draw waveform
+    push();
+    stroke(76, 175, 80);
+    strokeWeight(2);
+    noFill();
+    beginShape();
+    const history = midiValueHistory.mix;
+    for (let i = 0; i < history.length; i++) {
+      const x = histX + 5 + (i / (MIDI_HISTORY_LENGTH - 1)) * (histWidth - 10);
+      const yVal = waveY + 15 + waveHeight - (history[i] / 127) * waveHeight;
+      vertex(x, yVal);
+    }
+    endShape();
+    pop();
+  }
 }
