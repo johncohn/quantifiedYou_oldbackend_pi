@@ -56,6 +56,17 @@ export function KioskAutoMapper() {
     paramNamesRef.current = Object.keys(params);
   }, [params]);
 
+  // Listen for Muse reconnection events and reset adaptive ranges
+  useEffect(() => {
+    const handleReconnect = (event) => {
+      console.log('[AUTOMAPPER] Muse reconnected, resetting adaptive ranges');
+      rangesRef.current = {};  // Clear adaptive range data for fresh start
+    };
+
+    window.addEventListener('muse-reconnected', handleReconnect);
+    return () => window.removeEventListener('muse-reconnected', handleReconnect);
+  }, []);
+
   useEffect(() => {
     // Only process when there's a stream update
     if (update?.type !== 'stream') return;

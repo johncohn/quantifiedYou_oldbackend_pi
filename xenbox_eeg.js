@@ -223,31 +223,42 @@ function sigmoid(x, k = STEEP, m = midpoint) {
 // MIDI OUTPUT FUNCTIONS - Send CC to Bela GEM
 // =============================================================================
 
+// Store MIDI access for reconnection
+let midiAccess = null;
+
 async function initMIDI() {
   console.log("[MIDI] Initializing MIDI output...");
   try {
-    const midiAccess = await navigator.requestMIDIAccess();
+    midiAccess = await navigator.requestMIDIAccess();
     console.log(`[MIDI] Found ${midiAccess.outputs.size} MIDI output(s)`);
 
-    // Find Bela output
+    // Listen for MIDI device connect/disconnect events
+    midiAccess.onstatechange = (event) => {
+      console.log(`[MIDI] State change: ${event.port.name} - ${event.port.state}`);
+      if (event.port.type === 'output') {
+        if (event.port.state === 'disconnected') {
+          // Check if it was our Bela output
+          if (midiOutput && event.port.id === midiOutput.id) {
+            console.log("[MIDI] Bela disconnected!");
+            midiOutput = null;
+            midiEnabled = false;
+            midiStatusText = "MIDI: Bela disconnected";
+          }
+        } else if (event.port.state === 'connected') {
+          // Try to reconnect to Bela
+          if (event.port.name.toLowerCase().includes(MIDI_CONFIG.outputName.toLowerCase())) {
+            console.log("[MIDI] Bela reconnected!");
+            connectToMIDIOutput(event.port);
+          }
+        }
+      }
+    };
+
+    // Find and connect to Bela output
     for (const output of midiAccess.outputs.values()) {
       console.log(`[MIDI] Output available: "${output.name}"`);
       if (output.name.toLowerCase().includes(MIDI_CONFIG.outputName.toLowerCase())) {
-        midiOutput = output;
-        midiEnabled = true;
-        midiStatusText = `MIDI: Connected to ${output.name}`;
-        console.log(`[MIDI] Connected to: ${output.name}`);
-
-        // Send fixed Tone.js-matching values on connect
-        setTimeout(() => {
-          sendMIDICC(MIDI_CONFIG.cc.rate, MIDI_CONFIG.fixedValues.rate);
-          sendMIDICC(MIDI_CONFIG.cc.depth, MIDI_CONFIG.fixedValues.depth);
-          sendMIDICC(MIDI_CONFIG.cc.feedback, MIDI_CONFIG.fixedValues.feedback);
-          sendMIDICC(MIDI_CONFIG.cc.gain, MIDI_CONFIG.fixedValues.gain);
-          sendMIDICC(MIDI_CONFIG.cc.sweep, MIDI_CONFIG.fixedValues.sweep);
-          console.log("Sent fixed chorus parameters to Bela (sweep OFF)");
-        }, 500);
-
+        connectToMIDIOutput(output);
         return;
       }
     }
@@ -265,6 +276,23 @@ async function initMIDI() {
     midiStatusText = `MIDI: Error - ${err.message}`;
     console.error("MIDI initialization error:", err);
   }
+}
+
+function connectToMIDIOutput(output) {
+  midiOutput = output;
+  midiEnabled = true;
+  midiStatusText = `MIDI: Connected to ${output.name}`;
+  console.log(`[MIDI] Connected to: ${output.name}`);
+
+  // Send fixed Tone.js-matching values on connect
+  setTimeout(() => {
+    sendMIDICC(MIDI_CONFIG.cc.rate, MIDI_CONFIG.fixedValues.rate);
+    sendMIDICC(MIDI_CONFIG.cc.depth, MIDI_CONFIG.fixedValues.depth);
+    sendMIDICC(MIDI_CONFIG.cc.feedback, MIDI_CONFIG.fixedValues.feedback);
+    sendMIDICC(MIDI_CONFIG.cc.gain, MIDI_CONFIG.fixedValues.gain);
+    sendMIDICC(MIDI_CONFIG.cc.sweep, MIDI_CONFIG.fixedValues.sweep);
+    console.log("[MIDI] Sent fixed chorus parameters to Bela (sweep OFF)");
+  }, 500);
 }
 
 function sendMIDICC(cc, value) {

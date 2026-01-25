@@ -486,6 +486,12 @@ class KioskMuseManager {
       if (success) {
         this.log('Reconnected successfully!');
         this.reconnectAttempts = 0;
+
+        // Emit custom event so KioskAutoMapper can reset its state
+        window.dispatchEvent(new CustomEvent('muse-reconnected', {
+          detail: { deviceId: this.deviceId }
+        }));
+        this.log('Dispatched muse-reconnected event');
       } else {
         this._scheduleReconnect();
       }
