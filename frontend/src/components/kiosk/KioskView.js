@@ -14,6 +14,7 @@ import { useParams } from "react-router-dom";
 import { useQuery, gql } from "@apollo/client";
 import { useSelector, useDispatch } from "react-redux";
 import { MuseConnectButton } from "./MuseConnectButton";
+import { KioskAutoMapper } from "./KioskAutoMapper";
 import { fetchCode } from "../visuals/utility/fetch_code";
 import { selectParamValues } from "../visuals/utility/selectors";
 
@@ -218,6 +219,9 @@ export function KioskView() {
 
   return (
     <div style={styles.container}>
+      {/* Auto-map Muse data to visualization parameters */}
+      <KioskAutoMapper />
+
       {/* Muse connect button overlay */}
       <MuseConnectButton />
 
