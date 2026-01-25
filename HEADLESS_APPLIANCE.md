@@ -14,7 +14,9 @@ The system creates a real-time biofeedback loop:
 2. **Raspberry Pi 5** processes EEG and runs the visualization dashboard
 3. **Bela GEM** receives MIDI CC messages and applies audio effects
 
-The key innovation is **automatic Muse connection without user interaction** after initial pairing, enabling true headless operation.
+Key innovations:
+- **Automatic Muse connection** without user interaction after initial pairing
+- **Headset worn detection** via PPG heart rate - MIDI is suppressed when headset not worn
 
 ---
 
@@ -79,21 +81,26 @@ Muse Headset
     ▼
 kiosk-muse.js (KioskMuseManager)
     │
-    │ Calculate band powers via FFT
+    │ Calculate band powers via FFT (EEG)
+    │ Calculate heart rate via PPG peaks
+    │ Determine isWorn state (HR 40-200 BPM = worn)
     │ Dispatch to Redux store
     ▼
 KioskAutoMapper.js
     │
     │ Normalize EEG values (0-1)
+    │ Pass HR and isWorn directly
     │ Map to visualization parameters
     ▼
 xenbox_eeg.js (p5.js visualization)
     │
     │ 1. Display EEG bands on histogram
-    │ 2. Calculate relative power (alpha_rel = alpha / sum)
-    │ 3. Track running mean for adaptive threshold
-    │ 4. Apply sigmoid: chorus_wet = 1 / (1 + exp(-smoothness * deviation * sensitivity))
-    │ 5. Send MIDI CC4 = chorus_wet * 127
+    │ 2. Display HR and worn status on dashboard
+    │ 3. Calculate relative power (alpha_rel = alpha / sum)
+    │ 4. Track running mean for adaptive threshold
+    │ 5. Apply sigmoid: chorus_wet = 1 / (1 + exp(-smoothness * deviation * sensitivity))
+    │ 6. IF WORN: Send MIDI CC4 = chorus_wet * 127
+    │    IF NOT WORN: Send MIDI CC4 = 0 (suppress)
     ▼
 Bela GEM (Pure Data)
     │
@@ -214,6 +221,56 @@ Parameters:
 | CC4 | Mix | 0-1 | **Dynamic: Alpha EEG** |
 | CC5 | Gain | 0-1 | Fixed (0.8) |
 | CC6 | Sweep | On/Off | Fixed (Off) |
+
+### 4. PPG-Based Headset Worn Detection
+
+The Muse 2 has a PPG (photoplethysmography) sensor that detects blood flow. This only works when the headset is worn on someone's head with skin contact.
+
+**How it works:**
+
+```javascript
+// kiosk-muse.js - _calculateHeartRate()
+
+// 1. Collect PPG samples from infrared channel
+this.muse.ppgReadings.subscribe((ppgReading) => {
+  if (ppgReading.ppgChannel === 2) {  // Infrared
+    this.ppgBuffer.push(...ppgReading.samples);
+  }
+});
+
+// 2. Filter and normalize the signal
+const filtered = this._filtfilt(coeffs, [1.0], this.ppgBuffer);
+const normalized = this._normalizeArray(filtered, time);
+
+// 3. Find peaks using adaptive threshold
+const { peak_locs } = this._adaptiveThreshold(normalized, ppg_fs);
+
+// 4. Calculate heart rate from peak intervals
+const hr = this._getHeartRateFromPeaks(peak_locs, ppg_fs);
+
+// 5. Determine worn state
+this.isWorn = hr >= 40 && hr <= 200;  // Valid HR range
+```
+
+**MIDI Suppression:**
+
+When `isWorn = false`:
+- Dashboard shows "NOT WORN (MIDI suppressed)" in red
+- MIDI CC4 (mix) is forced to 0
+- Prevents random audio modulation from electrical noise
+
+When `isWorn = true`:
+- Dashboard shows "HR: XX BPM - HEADSET WORN" in green
+- MIDI CC4 responds to Alpha EEG as normal
+
+**Dashboard Display:**
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  FPS: 60 | Samples: 100    HR: 72 BPM - HEADSET WORN       │
+│  MIDI: Connected to Bela                                    │
+├─────────────────────────────────────────────────────────────┤
+```
 
 ---
 
