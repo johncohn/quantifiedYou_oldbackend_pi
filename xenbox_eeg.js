@@ -135,6 +135,44 @@ const STEEP = CONFIG.sigmoid.steepness;
 const midpoint = CONFIG.sigmoid.fixedMidpoint;
 const threshold = CONFIG.adaptive.multiplier;
 
+// =============================================================================
+// MIDI OUTPUT CONFIGURATION - Bela GEM Chorus Control
+// =============================================================================
+const MIDI_CONFIG = {
+  enabled: true,           // Set to false to disable MIDI output
+  outputName: "Bela",      // Partial match for MIDI output device name
+  channel: 0,              // MIDI channel (0-15)
+
+  // CC mappings matching Bela chorus patch
+  cc: {
+    rate: 1,               // CC1: LFO rate (0.1-8 Hz)
+    depth: 2,              // CC2: Modulation depth (0-1)
+    feedback: 3,           // CC3: Feedback (0-0.8)
+    mix: 4,                // CC4: Wet/dry mix (0-1) - controlled by Alpha
+    gain: 5,               // CC5: Master gain (0-1)
+    sweep: 6               // CC6: Auto-sweep toggle (0=off, 127=on)
+  },
+
+  // Fixed values to match Tone.js chorus settings
+  // Sent once on MIDI connection
+  fixedValues: {
+    rate: 24,              // 1.5 Hz: (1.5 / 8) * 127 ≈ 24
+    depth: 64,             // 0.5: 0.5 * 127 ≈ 64
+    feedback: 0,           // Tone.js chorus has no feedback
+    gain: 100,             // ~0.8 default gain
+    sweep: 0               // Turn OFF auto-sweep (xenbox controls params)
+  },
+
+  // Rate limiting for CC messages (ms between sends)
+  throttleMs: 50
+};
+
+// MIDI state
+let midiOutput = null;
+let midiEnabled = false;
+let lastMidiSendTime = 0;
+let midiStatusText = "MIDI: Not initialized";
+
 // UI elements
 let micSelect;
 let userMic;
@@ -181,10 +219,80 @@ function sigmoid(x, k = STEEP, m = midpoint) {
   return 1 / (1 + Math.exp(-k * (x - m)));
 }
 
+// =============================================================================
+// MIDI OUTPUT FUNCTIONS - Send CC to Bela GEM
+// =============================================================================
+
+async function initMIDI() {
+  try {
+    const midiAccess = await navigator.requestMIDIAccess();
+
+    // Find Bela output
+    for (const output of midiAccess.outputs.values()) {
+      console.log("MIDI Output found:", output.name);
+      if (output.name.toLowerCase().includes(MIDI_CONFIG.outputName.toLowerCase())) {
+        midiOutput = output;
+        midiEnabled = true;
+        midiStatusText = `MIDI: Connected to ${output.name}`;
+        console.log("Connected to MIDI output:", output.name);
+
+        // Send fixed Tone.js-matching values on connect
+        setTimeout(() => {
+          sendMIDICC(MIDI_CONFIG.cc.rate, MIDI_CONFIG.fixedValues.rate);
+          sendMIDICC(MIDI_CONFIG.cc.depth, MIDI_CONFIG.fixedValues.depth);
+          sendMIDICC(MIDI_CONFIG.cc.feedback, MIDI_CONFIG.fixedValues.feedback);
+          sendMIDICC(MIDI_CONFIG.cc.gain, MIDI_CONFIG.fixedValues.gain);
+          sendMIDICC(MIDI_CONFIG.cc.sweep, MIDI_CONFIG.fixedValues.sweep);
+          console.log("Sent fixed chorus parameters to Bela (sweep OFF)");
+        }, 500);
+
+        return;
+      }
+    }
+
+    // If Bela not found, list available outputs
+    const outputNames = Array.from(midiAccess.outputs.values()).map(o => o.name);
+    if (outputNames.length > 0) {
+      midiStatusText = `MIDI: Bela not found. Available: ${outputNames.join(", ")}`;
+      console.log("Bela not found. Available MIDI outputs:", outputNames);
+    } else {
+      midiStatusText = "MIDI: No outputs available";
+      console.log("No MIDI outputs available");
+    }
+  } catch (err) {
+    midiStatusText = `MIDI: Error - ${err.message}`;
+    console.error("MIDI initialization error:", err);
+  }
+}
+
+function sendMIDICC(cc, value) {
+  if (!midiOutput || !midiEnabled) return;
+
+  // Clamp value to 0-127
+  const midiValue = Math.max(0, Math.min(127, Math.round(value)));
+
+  // Send CC message: [status, cc number, value]
+  // Status = 0xB0 + channel for CC messages
+  const status = 0xB0 + MIDI_CONFIG.channel;
+  midiOutput.send([status, cc, midiValue]);
+}
+
+function sendMIDICCThrottled(cc, value) {
+  const now = performance.now();
+  if (now - lastMidiSendTime < MIDI_CONFIG.throttleMs) return;
+  lastMidiSendTime = now;
+  sendMIDICC(cc, value);
+}
+
 function setup() {
   createCanvas(800, 600);
   textAlign(CENTER, CENTER);
   textSize(14);
+
+  // Initialize MIDI output to Bela
+  if (MIDI_CONFIG.enabled) {
+    initMIDI();
+  }
 
   // Mic selector
   navigator.mediaDevices.enumerateDevices().then(devices => {
@@ -358,6 +466,9 @@ function draw() {
   text(`Alpha Mean: ${nf(alphaMean, 1, 3)} | Chorus: ${nf(chorus_wetVal, 1, 2)}`, 20, 200);
   text(`Gamma Mean: ${nf(gammaMean, 1, 3)} | Distortion: ${nf(distortion_wetVal, 1, 2)}`, 20, 220);
   text(`Frame Rate: ${displayFPS} fps | Data Points: ${signalHistory["Alpha"].length}`, 20, 240);
+  // MIDI status
+  fill(midiEnabled ? [0, 128, 0] : [128, 0, 0]);
+  text(midiStatusText, 20, 260);
   pop();
 
   // Draw signal plots
@@ -366,8 +477,16 @@ function draw() {
   // Apply effect modulations
   if (checkboxes["Chorus"].checked()) {
     chorus.wet.value = chorus_wetVal;
+    // Send to Bela via MIDI CC4 (mix)
+    if (midiEnabled) {
+      sendMIDICCThrottled(MIDI_CONFIG.cc.mix, chorus_wetVal * 127);
+    }
   } else {
     chorus.wet.value = 0;
+    // Send zero mix to Bela when chorus disabled
+    if (midiEnabled) {
+      sendMIDICCThrottled(MIDI_CONFIG.cc.mix, 0);
+    }
   }
 
   if (checkboxes["Flanger"].checked()) {

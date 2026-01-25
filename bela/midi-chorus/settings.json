@@ -1,0 +1,8 @@
+{
+  "fileName": "_main.pd",
+  "CLArgs": [
+    "-dacChannels", "2",
+    "-adcChannels", "2",
+    "-channel", "2"
+  ]
+}
