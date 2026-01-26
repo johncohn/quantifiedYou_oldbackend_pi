@@ -171,6 +171,8 @@ const MIDI_CONFIG = {
 let midiOutput = null;
 let midiEnabled = false;
 let lastMidiSendTime = 0;
+let _lastLoggedMix = -1;  // Track last logged mix value to reduce console spam
+let hasEEGData = false;    // True when Muse is sending data
 let midiStatusText = "MIDI: Not initialized";
 
 // MIDI parameter values for visualization (0-127 scale)
@@ -201,6 +203,10 @@ let eegDisplayValues = {
 // Heart rate and worn detection
 let heartRate = 0;
 let isWorn = false;
+let ppgSampleCount = 0;
+let lastPpgValue = 0;
+let ppgWaveform = [];
+let ppgVariance = 0;
 
 // UI elements
 let micSelect;
@@ -342,7 +348,8 @@ function sendMIDICC(cc, value) {
     if (midiValueHistory.mix.length > MIDI_HISTORY_LENGTH) {
       midiValueHistory.mix.shift();
     }
-    console.log(`[MIDI] CC${cc}=${midiValue} (mix=${(value/127).toFixed(2)})`);
+    // Suppress CC mix logging during normal operation - too noisy
+    // Only state-change MIDI logs (connect/disconnect) will show
   } else if (cc === MIDI_CONFIG.cc.rate) {
     midiValues.rate = midiValue;
   } else if (cc === MIDI_CONFIG.cc.depth) {
@@ -500,10 +507,17 @@ function draw() {
 
   // Extract heart rate and worn state (from PPG)
   heartRate = isFinite(Number(data?.["HR"])) ? Number(data["HR"]) : 0;
-  isWorn = data?.["isWorn"] === true || (heartRate >= 40 && heartRate <= 200);
+  isWorn = data?.["isWorn"] === true;
+  ppgSampleCount = isFinite(Number(data?.["ppgSampleCount"])) ? Number(data["ppgSampleCount"]) : 0;
+  lastPpgValue = isFinite(Number(data?.["lastPpgValue"])) ? Number(data["lastPpgValue"]) : 0;
+  ppgVariance = isFinite(Number(data?.["ppgVariance"])) ? Number(data["ppgVariance"]) : 0;
+  if (Array.isArray(data?.["ppgWaveform"])) {
+    ppgWaveform = data["ppgWaveform"];
+  }
 
   // Weighted aggregate = sum of all parameter values (slider-scaled data)
   const weighted = alpha + lowBeta + highBeta + theta + gamma;
+  hasEEGData = weighted > 0;  // Track if Muse is actually sending data
 
   // Calculate sum for normalization (for relative values used in effects)
   const sum = weighted; // same as the sum of all components
@@ -570,19 +584,36 @@ function draw() {
   // MIDI status
   fill(midiEnabled ? [0, 128, 0] : [128, 0, 0]);
   text(midiStatusText, 280, 35);
-  // Heart rate and worn status
+  // Worn status - large and prominent
   if (isWorn) {
-    fill(0, 150, 0);  // Green when worn
-    text(`HR: ${heartRate} BPM - HEADSET WORN`, 480, 20);
+    // Green banner
+    fill(0, 150, 0, 200);
+    noStroke();
+    rect(width - 220, 5, 210, 45, 8);
+    fill(255);
+    textSize(16);
+    textAlign(CENTER, CENTER);
+    text('HEADSET ON', width - 115, 18);
+    textSize(11);
+    text(`HR: ${heartRate || '--'} BPM`, width - 115, 36);
   } else {
-    fill(200, 0, 0);  // Red when not worn
-    text(`HR: ${heartRate || '--'} BPM - NOT WORN (MIDI suppressed)`, 480, 20);
+    // Red banner
+    fill(200, 0, 0, 200);
+    noStroke();
+    rect(width - 220, 5, 210, 45, 8);
+    fill(255);
+    textSize(16);
+    textAlign(CENTER, CENTER);
+    text('HEADSET OFF', width - 115, 18);
+    textSize(11);
+    text('MIDI SUPPRESSED', width - 115, 36);
   }
+  textAlign(LEFT, TOP);
+  textSize(12);
   pop();
 
-  // Console logging - log every second (60 frames at 60fps)
-  if (frameCount % 60 === 0) {
-    const hasData = weighted > 0;
+  // Console logging - log every 30 seconds (reduced to minimize noise)
+  if (frameCount % 1800 === 0) {
     console.log(`[XENBOX] Alpha:${nf(alpha_rel,1,3)} Chorus:${nf(chorus_wetVal,1,2)} HR:${heartRate} Worn:${isWorn?'YES':'NO'} MIDI:${midiEnabled&&isWorn?'ON':'SUPPRESSED'}`);
   }
 
@@ -592,21 +623,26 @@ function draw() {
   // Draw MIDI parameter histogram
   drawMIDIHistogram();
 
+  // Draw PPG waveform for debugging
+  drawPPGWaveform();
+
   // Apply effect modulations
-  // MIDI is suppressed when headset is not worn (no valid heart rate)
+  // MIDI is suppressed when: no EEG data (Muse not connected) or headset not worn
   if (checkboxes["Chorus"].checked()) {
     chorus.wet.value = isWorn ? chorus_wetVal : 0;
-    // Send to Bela via MIDI CC4 (mix) - only if worn
-    if (midiEnabled && isWorn) {
-      sendMIDICCThrottled(MIDI_CONFIG.cc.mix, chorus_wetVal * 127);
-    } else if (midiEnabled && !isWorn) {
-      // Send zero when not worn to mute effect
-      sendMIDICCThrottled(MIDI_CONFIG.cc.mix, 0);
+    // Only send MIDI when we have EEG data flowing
+    if (midiEnabled && hasEEGData) {
+      if (isWorn) {
+        sendMIDICCThrottled(MIDI_CONFIG.cc.mix, chorus_wetVal * 127);
+      } else {
+        // Send zero when not worn to mute effect
+        sendMIDICCThrottled(MIDI_CONFIG.cc.mix, 0);
+      }
     }
   } else {
     chorus.wet.value = 0;
-    // Send zero mix to Bela when chorus disabled
-    if (midiEnabled) {
+    // Send zero mix to Bela when chorus disabled (only if EEG active)
+    if (midiEnabled && hasEEGData) {
       sendMIDICCThrottled(MIDI_CONFIG.cc.mix, 0);
     }
   }
@@ -931,6 +967,83 @@ function drawMIDIHistogram() {
       vertex(x, yVal);
     }
     endShape();
+    pop();
+  }
+}
+
+function drawPPGWaveform() {
+  // Draw PPG waveform at bottom of screen for debugging
+  const ppgX = 280;
+  const ppgY = height - 70;
+  const ppgWidth = width - ppgX - 20;
+  const ppgHeight = 60;
+
+  // Background
+  push();
+  fill(255);
+  stroke(100);
+  strokeWeight(1);
+  rect(ppgX, ppgY, ppgWidth, ppgHeight, 3);
+  pop();
+
+  // Title
+  push();
+  fill(0);
+  textSize(10);
+  textAlign(LEFT, TOP);
+  const ppgStatus = ppgSampleCount > 0 ? `(${ppgSampleCount} samples)` : '(no data)';
+  text(`PPG Waveform ${ppgStatus}`, ppgX + 5, ppgY + 2);
+  pop();
+
+  // Draw waveform if we have data
+  if (ppgWaveform && ppgWaveform.length > 1) {
+    // Find min/max for scaling
+    let minVal = Infinity, maxVal = -Infinity;
+    for (let v of ppgWaveform) {
+      if (isFinite(v)) {
+        if (v < minVal) minVal = v;
+        if (v > maxVal) maxVal = v;
+      }
+    }
+
+    // Ensure some range
+    if (maxVal - minVal < 1) {
+      const center = (maxVal + minVal) / 2;
+      minVal = center - 0.5;
+      maxVal = center + 0.5;
+    }
+
+    // Draw the waveform
+    push();
+    stroke(255, 0, 100);  // Pink/red for PPG (blood)
+    strokeWeight(1.5);
+    noFill();
+    beginShape();
+    for (let i = 0; i < ppgWaveform.length; i++) {
+      const x = ppgX + 5 + (i / (ppgWaveform.length - 1)) * (ppgWidth - 10);
+      const normalized = (ppgWaveform[i] - minVal) / (maxVal - minVal);
+      const y = ppgY + 15 + (ppgHeight - 20) - normalized * (ppgHeight - 20);
+      vertex(x, y);
+    }
+    endShape();
+    pop();
+
+    // Show value range
+    push();
+    fill(100);
+    textSize(8);
+    textAlign(RIGHT, TOP);
+    text(`max: ${maxVal.toFixed(0)}`, ppgX + ppgWidth - 5, ppgY + 2);
+    textAlign(RIGHT, BOTTOM);
+    text(`min: ${minVal.toFixed(0)}`, ppgX + ppgWidth - 5, ppgY + ppgHeight - 2);
+    pop();
+  } else {
+    // No data message
+    push();
+    fill(150);
+    textSize(12);
+    textAlign(CENTER, CENTER);
+    text("No PPG data received", ppgX + ppgWidth / 2, ppgY + ppgHeight / 2);
     pop();
   }
 }

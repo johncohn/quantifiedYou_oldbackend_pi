@@ -65,6 +65,25 @@ class KioskMuseManager {
     this.isWorn = false;
     this.wornListeners = new Set();
 
+    // Hysteresis for worn detection (prevent flickering)
+    this.wornConfidenceCounter = 0;
+    this.WORN_HYSTERESIS_THRESHOLD = 3;  // Require 3 consecutive readings to change state
+
+    // PPG-based worn detection using infrared channel mean
+    // ON head: infrared mean ~220,000 | OFF head: infrared mean ~8,500
+    this.ppgVariance = 0;
+    this.PPG_INFRARED_WORN_THRESHOLD = 50000;  // Well between 8,500 (off) and 220,000 (on)
+
+    // PPG per-channel buffers for diagnostic comparison
+    this.ppgChannelBuffers = {
+      0: [],  // ambient
+      1: [],  // infrared
+      2: [],  // red
+    };
+    this.PPG_DIAG_BUFFER_SIZE = 128;  // ~2 seconds at 64Hz
+    this.ppgChannelStats = {};  // Latest stats per channel
+    this.hrCalcCount = 0;  // Counter for diagnostic logging
+
     // Connect to LED status WebSocket
     this._connectStatusSocket();
   }
@@ -315,9 +334,12 @@ class KioskMuseManager {
       // Create Muse client and connect
       this.muse = new MuseClient();
       this.muse.enablePpg = true; // Enable PPG for heart rate / worn detection
+      this.log(`Created MuseClient, enablePpg set to: ${this.muse.enablePpg}`);
 
       // Connect muse-js to the GATT server
+      this.log('Calling muse.connect() with GATT server...');
       await this.muse.connect(server);
+      this.log(`muse.connect() completed. ppgReadings exists: ${!!this.muse.ppgReadings}, ppgCharacteristics: ${this.muse.ppgCharacteristics?.length || 0}`);
 
       this.deviceId = this.device.name;
       this.log(`Connected to ${this.deviceId}`);
@@ -374,8 +396,22 @@ class KioskMuseManager {
   }
 
   async _startStreaming() {
-    this.log('Starting EEG stream...');
+    this.log('Starting EEG/PPG stream...');
+    this.log(`enablePpg before start(): ${this.muse.enablePpg}`);
+    this.log(`ppgReadings exists before start(): ${!!this.muse.ppgReadings}`);
+
+    // Call start() which sends the 'p50' preset command (enabling PPG hardware)
     await this.muse.start();
+    this.log('muse.start() completed - p50 preset should have been sent');
+
+    // Also send explicit PPG enable command as backup
+    try {
+      this.log('Sending explicit p50 preset command...');
+      await this.muse.sendCommand('p50');
+      this.log('p50 command sent successfully');
+    } catch (e) {
+      this.log(`p50 command failed: ${e.message}`);
+    }
 
     // Subscribe to EEG readings
     this.muse.eegReadings.subscribe((reading) => {
@@ -411,13 +447,50 @@ class KioskMuseManager {
     });
 
     // Subscribe to PPG readings for heart rate / worn detection
-    this.muse.ppgReadings.subscribe((ppgReading) => {
-      // PPG channel 2 is the infrared channel (best for heart rate)
-      if (ppgReading.ppgChannel === 2) {
-        this.ppgBuffer.splice(0, ppgReading.samples.length);
-        this.ppgBuffer.push(...ppgReading.samples);
-      }
-    });
+    this.ppgSampleCount = 0;
+    this.lastPpgValue = 0;
+    this.ppgChannelCounts = { 0: 0, 1: 0, 2: 0 }; // Track all PPG channels
+
+    // Debug: Check if ppgReadings observable exists
+    this.log(`PPG enabled after start(): ${this.muse.enablePpg}`);
+    this.log(`PPG readings observable exists: ${!!this.muse.ppgReadings}`);
+    this.log(`PPG characteristics count: ${this.muse.ppgCharacteristics?.length || 0}`);
+
+    if (this.muse.ppgReadings) {
+      this.muse.ppgReadings.subscribe((ppgReading) => {
+        // Track all channels
+        const ch = ppgReading.ppgChannel;
+        this.ppgChannelCounts[ch] = (this.ppgChannelCounts[ch] || 0) + 1;
+
+        // Log first PPG reading from ANY channel
+        const totalPpgReadings = Object.values(this.ppgChannelCounts).reduce((a, b) => a + b, 0);
+        if (totalPpgReadings === 1) {
+          this.log(`*** FIRST PPG READING! Channel: ${ch}, samples: ${ppgReading.samples?.length}, values: ${ppgReading.samples?.slice(0, 3).join(', ')}`);
+        }
+
+        // Buffer all channels for diagnostic comparison
+        const diagBuf = this.ppgChannelBuffers[ch];
+        if (diagBuf) {
+          diagBuf.push(...ppgReading.samples);
+          while (diagBuf.length > this.PPG_DIAG_BUFFER_SIZE) {
+            diagBuf.shift();
+          }
+        }
+
+        // Use infrared channel (1) for heart rate buffer
+        if (ch === 1) {
+          this.ppgBuffer.splice(0, ppgReading.samples.length);
+          this.ppgBuffer.push(...ppgReading.samples);
+          this.ppgSampleCount += ppgReading.samples.length;
+          this.lastPpgValue = ppgReading.samples[ppgReading.samples.length - 1] || 0;
+        }
+      });
+      this.log('Subscribed to PPG readings observable');
+    } else {
+      this.log('WARNING: PPG readings observable is NULL/undefined!');
+      this.log('This means muse-js did not create PPG subscriptions.');
+      this.log('Check: Was enablePpg=true BEFORE muse.connect() was called?');
+    }
 
     // Start band power and heart rate calculations
     this._startMetricStream();
@@ -487,6 +560,22 @@ class KioskMuseManager {
       avrg[col] = this._average(bandpowers_arr);
     }
 
+    // Include HR and isWorn with band powers so they flow through the same data path
+    avrg.HR = this.heartRate;
+    avrg.isWorn = this.isWorn;
+    avrg.ppgSampleCount = this.ppgSampleCount || 0;
+    avrg.lastPpgValue = this.lastPpgValue || 0;
+    avrg.ppgVariance = this.ppgVariance || 0;
+    avrg.ppgChannelStats = this.ppgChannelStats || {};
+
+    // Include last 100 PPG samples for graphing (downsampled from 640 in buffer)
+    const ppgForGraph = [];
+    const step = Math.max(1, Math.floor(this.ppgBuffer.length / 100));
+    for (let i = 0; i < this.ppgBuffer.length; i += step) {
+      ppgForGraph.push(this.ppgBuffer[i]);
+    }
+    avrg.ppgWaveform = ppgForGraph.slice(0, 100);
+
     store.dispatch({
       type: "devices/streamUpdate",
       payload: {
@@ -535,16 +624,52 @@ class KioskMuseManager {
 
       // Calculate heart rate from peaks
       const hr = this._getHeartRateFromPeaks(peak_locs, ppg_fs);
-
-      // Update worn state based on valid heart rate
-      const previousWorn = this.isWorn;
       this.heartRate = hr;
-      this.isWorn = hr >= 40 && hr <= 200;  // Valid HR range
 
-      // Log state changes
-      if (previousWorn !== this.isWorn) {
-        this.log(`Worn state changed: ${this.isWorn ? 'WORN' : 'NOT WORN'} (HR: ${hr})`);
-        this._notifyWornListeners();
+      // Calculate per-channel stats
+      const chNames = ['ambient', 'infrared', 'red'];
+      for (let c = 0; c < 3; c++) {
+        const buf = this.ppgChannelBuffers[c];
+        if (buf.length > 10) {
+          const mean = buf.reduce((a, b) => a + b, 0) / buf.length;
+          const variance = this._variance(buf);
+          const min = Math.min(...buf);
+          const max = Math.max(...buf);
+          this.ppgChannelStats[c] = { name: chNames[c], mean, variance, min, max, range: max - min };
+        }
+      }
+
+      // PPG variance (kept for display)
+      this.ppgVariance = this._variance(this.ppgBuffer);
+
+      // Worn detection: infrared mean is the strongest discriminator
+      // ON head: infrared mean ~220,000 | OFF head: ~8,500 (26x difference)
+      const infraredStats = this.ppgChannelStats[1];
+      const infraredMean = infraredStats ? infraredStats.mean : 0;
+      const currentlyWorn = infraredMean > this.PPG_INFRARED_WORN_THRESHOLD;
+
+      // Log diagnostic stats every 3 seconds
+      this.hrCalcCount++;
+      if (this.hrCalcCount % 3 === 0) {
+        console.log(`[PPG] IR mean=${infraredMean.toFixed(0)} (threshold=${this.PPG_INFRARED_WORN_THRESHOLD}) worn=${currentlyWorn} HR=${hr}`);
+      }
+
+      // Apply hysteresis to prevent flickering
+      const previousWorn = this.isWorn;
+      if (currentlyWorn === this.isWorn) {
+        // State matches, reset counter
+        this.wornConfidenceCounter = 0;
+      } else {
+        // State differs, increment counter
+        this.wornConfidenceCounter++;
+
+        // Only change state after threshold consecutive readings
+        if (this.wornConfidenceCounter >= this.WORN_HYSTERESIS_THRESHOLD) {
+          this.isWorn = currentlyWorn;
+          this.wornConfidenceCounter = 0;
+          this.log(`Worn state changed: ${this.isWorn ? 'WORN' : 'NOT WORN'} (IR mean: ${infraredMean.toFixed(0)}, HR: ${hr})`);
+          this._notifyWornListeners();
+        }
       }
 
       // Dispatch to Redux store
@@ -659,6 +784,13 @@ class KioskMuseManager {
     const mean = arr.reduce((acc, val) => acc + val, 0) / n;
     const variance = arr.reduce((acc, val) => acc + Math.pow(val - mean, 2), 0) / n;
     return Math.sqrt(variance);
+  }
+
+  _variance(arr) {
+    const n = arr.length;
+    if (n === 0) return 0;
+    const mean = arr.reduce((acc, val) => acc + val, 0) / n;
+    return arr.reduce((acc, val) => acc + Math.pow(val - mean, 2), 0) / n;
   }
 
   _getHeartRateFromPeaks(peakLocs, ppgFs) {

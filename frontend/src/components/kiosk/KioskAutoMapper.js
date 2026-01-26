@@ -154,26 +154,35 @@ export function KioskAutoMapper() {
         },
       });
     }
+
+    // Pass through PPG debug data for visualization
+    if (museData.ppgSampleCount !== undefined) {
+      dispatch({
+        type: 'params/update',
+        payload: { name: 'ppgSampleCount', value: museData.ppgSampleCount },
+      });
+    }
+    if (museData.lastPpgValue !== undefined) {
+      dispatch({
+        type: 'params/update',
+        payload: { name: 'lastPpgValue', value: museData.lastPpgValue },
+      });
+    }
+    if (museData.ppgWaveform !== undefined) {
+      dispatch({
+        type: 'params/update',
+        payload: { name: 'ppgWaveform', value: museData.ppgWaveform },
+      });
+    }
+    if (museData.ppgVariance !== undefined) {
+      dispatch({
+        type: 'params/update',
+        payload: { name: 'ppgVariance', value: museData.ppgVariance },
+      });
+    }
   }, [update, dataStream, dispatch]);
 
-  // Log status periodically
-  useEffect(() => {
-    const interval = setInterval(() => {
-      const museDeviceId = Object.keys(dataStream).find(id =>
-        id.toLowerCase().includes('muse')
-      );
-
-      if (museDeviceId && dataStream[museDeviceId]) {
-        const data = dataStream[museDeviceId];
-        const hrStr = data.HR !== undefined ? `${data.HR} BPM` : 'N/A';
-        const wornStr = data.isWorn !== undefined ? (data.isWorn ? 'YES' : 'NO') : 'N/A';
-        console.log(`[AUTOMAPPER] Muse: Alpha=${data.Alpha?.toFixed(3) || 'N/A'} ` +
-          `HR=${hrStr} Worn=${wornStr}`);
-      }
-    }, 5000);
-
-    return () => clearInterval(interval);
-  }, [dataStream]);
+  // Logging disabled during PPG diagnostics
 
   // This component doesn't render anything
   return null;

@@ -224,52 +224,61 @@ Parameters:
 
 ### 4. PPG-Based Headset Worn Detection
 
-The Muse 2 has a PPG (photoplethysmography) sensor that detects blood flow. This only works when the headset is worn on someone's head with skin contact.
+The Muse 2 has a PPG (photoplethysmography) sensor with infrared and red LEDs. The sensor is activated by sending the `p50` preset command via muse-js.
 
 **How it works:**
 
-```javascript
-// kiosk-muse.js - _calculateHeartRate()
+The primary worn detection uses the **infrared channel mean value**, which provides a robust 26x signal difference between on-head and off-head states:
 
-// 1. Collect PPG samples from infrared channel
+| State | Infrared Mean | Red Mean | Ambient Mean |
+|-------|--------------|----------|--------------|
+| **ON head** | ~220,000 | ~156,000 | ~645 |
+| **OFF head** | ~8,500 | ~2,980 | ~783 |
+| **Ratio** | **26x** | **52x** | ~0.8x |
+
+```javascript
+// kiosk-muse.js - PPG worn detection
+
+// 1. Enable PPG sensor (p50 preset)
+this.muse.enablePpg = true;  // Before connect()
+// muse.start() sends 'p50' preset command to activate PPG hardware
+
+// 2. Collect all 3 PPG channels (ambient=0, infrared=1, red=2)
 this.muse.ppgReadings.subscribe((ppgReading) => {
-  if (ppgReading.ppgChannel === 2) {  // Infrared
-    this.ppgBuffer.push(...ppgReading.samples);
-  }
+  this.ppgChannelBuffers[ppgReading.ppgChannel].push(...ppgReading.samples);
 });
 
-// 2. Filter and normalize the signal
-const filtered = this._filtfilt(coeffs, [1.0], this.ppgBuffer);
-const normalized = this._normalizeArray(filtered, time);
+// 3. Calculate infrared channel mean
+const infraredMean = average(this.ppgChannelBuffers[1]);
 
-// 3. Find peaks using adaptive threshold
-const { peak_locs } = this._adaptiveThreshold(normalized, ppg_fs);
+// 4. Simple threshold (50,000 - huge margin on both sides)
+const currentlyWorn = infraredMean > 50000;
 
-// 4. Calculate heart rate from peak intervals
-const hr = this._getHeartRateFromPeaks(peak_locs, ppg_fs);
-
-// 5. Determine worn state
-this.isWorn = hr >= 40 && hr <= 200;  // Valid HR range
+// 5. Hysteresis: require 3 consecutive readings to change state
 ```
+
+Heart rate is also calculated from the infrared signal using peak detection, but worn detection does **not** depend on stable heart rate.
 
 **MIDI Suppression:**
 
 When `isWorn = false`:
-- Dashboard shows "NOT WORN (MIDI suppressed)" in red
-- MIDI CC4 (mix) is forced to 0
-- Prevents random audio modulation from electrical noise
+- Dashboard shows red banner: "HEADSET OFF / MIDI SUPPRESSED"
+- MIDI CC4 (mix) is not sent (zero traffic)
+- No MIDI traffic at all when Muse has no EEG data
 
 When `isWorn = true`:
-- Dashboard shows "HR: XX BPM - HEADSET WORN" in green
+- Dashboard shows green banner: "HEADSET ON" with heart rate
 - MIDI CC4 responds to Alpha EEG as normal
 
 **Dashboard Display:**
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│  FPS: 60 | Samples: 100    HR: 72 BPM - HEADSET WORN       │
-│  MIDI: Connected to Bela                                    │
-├─────────────────────────────────────────────────────────────┤
+┌──────────────────────────────────────────────────────────┐
+│  FPS: 60 | Samples: 100               ┌──────────────┐  │
+│  MIDI: Connected to Bela               │  HEADSET ON  │  │
+│                                        │  HR: 72 BPM  │  │
+│                                        └──────────────┘  │
+├──────────────────────────────────────────────────────────┤
 ```
 
 ---
@@ -303,17 +312,26 @@ sudo systemctl status yq-kiosk  # or autostart
 
 ### Bela GEM
 
+**IP Address:** 192.168.7.2 (USB network from Pi)
+
 **Deploy:**
 ```bash
 rsync -avz bela/midi-chorus/ root@bela.local:/root/Bela/projects/midi-chorus/
 ```
 
-**Run:**
+**Run manually:**
 ```bash
 ssh root@bela.local "cd Bela && make PROJECT=midi-chorus run"
 ```
 
-**Auto-start:** Enable "Run project on boot" in Bela IDE settings.
+**Auto-start on boot (configured):**
+```bash
+# /opt/Bela/startup_env
+ACTIVE=1
+PROJECT=midi-chorus
+```
+
+The `bela_startup.service` systemd unit is enabled and will auto-run midi-chorus on every boot. No manual interaction needed.
 
 ---
 
