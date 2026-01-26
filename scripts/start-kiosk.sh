@@ -61,6 +61,7 @@ chromium \
     --check-for-update-interval=31536000 \
     --enable-features=WebBluetooth,WebBluetoothNewPermissionsBackend \
     --enable-experimental-web-platform-features \
+    --unsafely-treat-insecure-origin-as-secure="http://xenbox.local:3000" \
     --autoplay-policy=no-user-gesture-required \
     --disable-background-networking \
     --disable-sync \
