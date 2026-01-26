@@ -34,8 +34,8 @@ export function P5iFrame({
     const source = /* html */ `
       <html>
       <head>
-        <script src="https://cdn.jsdelivr.net/npm/p5@1.11.3/lib/p5.min.js"></script>
-        <script src="https://cdnjs.cloudflare.com/ajax/libs/tone/14.8.35/Tone.min.js"></script>
+        <script src="${window.location.origin}/lib/p5.min.js"></script>
+        <script src="${window.location.origin}/lib/Tone.min.js"></script>
         ${scripts}
         <style>
           body {
