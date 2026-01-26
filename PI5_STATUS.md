@@ -28,7 +28,7 @@
 ## Hardware Configuration
 
 - **Device:** Raspberry Pi 5
-- **IP Address:** 192.168.2.2
+- **Hostname:** `xenbox.local` (via mDNS/Avahi over WiFi)
 - **Built-in Bluetooth:** BCM (disabled via rfkill)
 - **External Bluetooth:** TP-Link UB500 Adapter (hci1) - USB Bus
 - **EEG Headset:** Muse 2 (to be tested)
@@ -136,24 +136,24 @@ tail -f ~/yq-frontend.log
 
 #### Frontend Environment (`~/quantifiedYou_oldbackend_pi/frontend/.env`)
 ```bash
-REACT_APP_UPLOAD_URI_ENDPOINT_DEV="http://192.168.2.2:3001/api/graphql"
-REACT_APP_UPLOAD_URI_ENDPOINT="http://192.168.2.2:3001/api/graphql"
-REACT_APP_COLLAB_ENDPOINT_DEV="ws://192.168.2.2:3001/collab"
-REACT_APP_COLLAB_ENDPOINT="ws://192.168.2.2:3001/collab"
+REACT_APP_UPLOAD_URI_ENDPOINT_DEV="http://localhost:3001/api/graphql"
+REACT_APP_UPLOAD_URI_ENDPOINT="http://xenbox.local:3001/api/graphql"
+REACT_APP_COLLAB_ENDPOINT_DEV="ws://localhost:3001/collab"
+REACT_APP_COLLAB_ENDPOINT="ws://xenbox.local:3001/collab"
 GENERATE_SOURCEMAP=false
 ```
 
-**Note:** Uses Pi 5 IP address (192.168.2.2) instead of localhost for Web Bluetooth compatibility.
+**Note:** Uses `xenbox.local` (mDNS hostname) so the address stays constant regardless of network/IP changes.
 
 #### Backend Environment (`~/quantifiedYou_oldbackend_pi/keystone/.env`)
 ```bash
 DATABASE_URL=file:./keystone.db
 SESSION_SECRET=youquantified_pi5_session_secret
 FRONTEND_URL_DEV=http://localhost:3000
-FRONTEND_URL=http://192.168.2.2:3000
+FRONTEND_URL=http://xenbox.local:3000
 NODE_ENV=development
-ASSET_BASE_URL_DEV=http://192.168.2.2:3001
-ASSET_BASE_URL=http://192.168.2.2:3001
+ASSET_BASE_URL_DEV=http://localhost:3001
+ASSET_BASE_URL=http://xenbox.local:3001
 PORT=3001
 ```
 
@@ -169,14 +169,14 @@ PORT=3001
 
 1. Open Chrome/Chromium on the Pi
 2. Navigate to: `chrome://flags/#unsafely-treat-insecure-origin-as-secure`
-3. Add: `http://192.168.2.2:3000`
+3. Add: `http://xenbox.local:3000`
 4. Change dropdown to **"Enabled"**
 5. Click "Relaunch"
 6. **May require 2-3 relaunches** before Muse button becomes active
 
 ### Accessing the Application
 
-**Always use:** `http://192.168.2.2:3000` (not localhost:3000)
+**Always use:** `http://xenbox.local:3000` (not localhost:3000)
 
 This ensures:
 - Web Bluetooth API works with the Chrome flag
@@ -186,7 +186,7 @@ This ensures:
 ### Muse Connection Procedure
 
 1. Power on Muse headset (LED should blink)
-2. Navigate to `http://192.168.2.2:3000` in Chrome
+2. Navigate to `http://xenbox.local:3000` in Chrome
 3. Login to your account
 4. Go to Data tab
 5. Click "Muse" button
@@ -219,8 +219,8 @@ This ensures:
 - **Critical:** Built-in adapter must be blacklisted, not just disabled
 
 ### IP Address
-- **Pi 4:** 192.168.2.3
-- **Pi 5:** 192.168.2.2
+- **Pi 4:** 192.168.2.3 (old Ethernet setup)
+- **Pi 5:** `xenbox.local` (mDNS over WiFi)
 
 ### Code Version
 - Both now running identical code (commit 559ecf8)

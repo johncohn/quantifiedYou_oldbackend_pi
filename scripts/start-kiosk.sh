@@ -9,7 +9,7 @@
 set -e
 
 # Configuration
-KIOSK_URL="http://192.168.2.2:3000/kiosk/cmk8yniz80002jibx3fh7j9ax"
+KIOSK_URL="http://xenbox.local:3000/kiosk/cmk8yniz80002jibx3fh7j9ax"
 LOG_FILE="/home/xenbox/kiosk.log"
 
 log() {
@@ -30,7 +30,7 @@ log "Display available: $DISPLAY"
 log "Waiting for backend service..."
 MAX_WAIT=60
 WAITED=0
-while ! curl -s "http://192.168.2.2:3001/api/graphql" > /dev/null 2>&1; do
+while ! curl -s "http://xenbox.local:3001/api/graphql" > /dev/null 2>&1; do
     sleep 2
     WAITED=$((WAITED + 2))
     if [ $WAITED -ge $MAX_WAIT ]; then

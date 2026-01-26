@@ -287,7 +287,7 @@ When `isWorn = true`:
 
 ### Raspberry Pi 5
 
-**IP Address:** 192.168.2.2
+**Hostname:** `xenbox.local` (via mDNS/Avahi, accessible over WiFi)
 
 **Bluetooth:** TP-Link UB500 adapter (built-in disabled)
 
