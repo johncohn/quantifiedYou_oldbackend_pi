@@ -1,0 +1,16 @@
+[Unit]
+Description=YouQuantified Frontend Service
+After=network.target youquantified-backend.service
+
+[Service]
+Type=simple
+User=xenbox
+WorkingDirectory=/home/xenbox/quantifiedYou_oldbackend_pi/frontend
+ExecStart=/usr/bin/npx serve -s build -p 3000
+Restart=always
+RestartSec=10
+StandardOutput=append:/home/xenbox/yq-frontend.log
+StandardError=append:/home/xenbox/yq-frontend.log
+
+[Install]
+WantedBy=multi-user.target

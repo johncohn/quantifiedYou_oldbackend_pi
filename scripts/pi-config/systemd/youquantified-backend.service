@@ -1,0 +1,17 @@
+[Unit]
+Description=YouQuantified Backend Service
+After=network.target
+
+[Service]
+Type=simple
+User=xenbox
+WorkingDirectory=/home/xenbox/quantifiedYou_oldbackend_pi/keystone
+Environment="NODE_ENV=development"
+ExecStart=/usr/bin/npm run dev
+Restart=always
+RestartSec=10
+StandardOutput=append:/home/xenbox/yq-backend.log
+StandardError=append:/home/xenbox/yq-backend.log
+
+[Install]
+WantedBy=multi-user.target

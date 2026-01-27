@@ -1,0 +1,12 @@
+[Unit]
+Description=Configure Bluetooth adapters for Muse (TP-Link only)
+After=bluetooth.service
+Wants=bluetooth.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/bash -c "rfkill unblock bluetooth && hciconfig hci1 up 2>/dev/null || true"
+
+[Install]
+WantedBy=multi-user.target
