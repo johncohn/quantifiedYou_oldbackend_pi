@@ -243,6 +243,43 @@ Original Pi 5 installation backed up to:
 
 ---
 
+## Status Display & LED Indicator
+
+### On-Screen Status Panel (xenbox_eeg.js)
+
+A consolidated status panel in the top-left of the canvas (above the EEG histogram) shows three rows with green/red indicator dots:
+
+| Row | Indicator | Green | Red |
+|-----|-----------|-------|-----|
+| MUSE | PPG data flowing (`ppgSampleCount > 0`) | Connected | No Data |
+| HEADSET | Worn detection (`isWorn`) | On Head (shows BPM) | Off Head |
+| BELA | MIDI hardware (`midiEnabled`) | MIDI Active | Not Connected |
+
+Plus an FPS counter. Dark semi-transparent background for readability.
+
+### WS2812B LED (led_status_controller.py)
+
+Single LED on GPIO18 with 3-color scheme:
+
+| Color | Meaning | States |
+|-------|---------|--------|
+| Red (solid) | Nothing connected | IDLE, SEARCHING, ERROR, RECONNECTING, STARTUP |
+| Blue (solid) | Muse connected, not worn | CONNECTING, CONNECTED, STREAMING+not worn |
+| Green (solid) | Streaming + on head | STREAMING+worn |
+
+The frontend sends `worn_status` messages over WebSocket (port 8765) to the LED controller whenever worn state changes.
+
+### Kiosk Boot Sequence (start-kiosk.sh)
+
+The kiosk launcher waits for three things before launching Chromium:
+1. `labwc` compositor process + 5s settle time
+2. Backend serving the blob file (`curl -sf http://xenbox.local:3001/code/blob-jCTLjHalgu97`)
+3. Frontend responding (`curl -sf http://localhost:3000/`)
+
+Chromium runs as a blocking foreground process. If it exits, the script kills leftovers and restarts.
+
+---
+
 ## Setup Complete
 
 All configuration is persistent across reboots:
@@ -255,6 +292,9 @@ All configuration is persistent across reboots:
 - ✅ Web Bluetooth API functional
 - ✅ Muse connection stable with full EEG data streaming
 - ✅ xenbox_eeg.js ready with 5 EEG parameters configured
+- ✅ Consolidated status panel (MUSE/HEADSET/BELA) on dashboard
+- ✅ WS2812B LED with 3-color status (red/blue/green)
+- ✅ Kiosk boot waits for compositor + backend + frontend
 
 ---
 

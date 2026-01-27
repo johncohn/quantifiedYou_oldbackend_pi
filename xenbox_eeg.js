@@ -575,41 +575,58 @@ function draw() {
     }
   }
 
-  // Display statistics (compact, above histogram)
+  // Consolidated status panel (top-left, above histogram)
   push();
-  fill(0);
-  textSize(12);
-  textAlign(LEFT, TOP);
-  text(`FPS: ${displayFPS} | Samples: ${signalHistory["Alpha"].length}`, 280, 20);
-  // MIDI status
-  fill(midiEnabled ? [0, 128, 0] : [128, 0, 0]);
-  text(midiStatusText, 280, 35);
-  // Worn status - large and prominent
+  const panelX = 280;
+  const panelY = 5;
+  const panelW = 280;
+  const panelH = 90;
+  const rowH = 20;
+  const dotR = 6;
+  const textStartX = panelX + 25;
+
+  // Dark semi-transparent background
+  fill(30, 30, 30, 200);
+  noStroke();
+  rect(panelX, panelY, panelW, panelH, 8);
+
+  // Row 1: MUSE status - green when PPG data flowing
+  const museOk = ppgSampleCount > 0;
+  fill(museOk ? color(0, 200, 0) : color(200, 0, 0));
+  noStroke();
+  ellipse(panelX + 14, panelY + 15, dotR * 2, dotR * 2);
+  fill(255);
+  textSize(16);
+  textAlign(LEFT, CENTER);
+  text(`MUSE: ${museOk ? 'Connected' : 'No Data'}`, textStartX, panelY + 15);
+
+  // Row 2: HEADSET status - green when worn
+  fill(isWorn ? color(0, 200, 0) : color(200, 0, 0));
+  noStroke();
+  ellipse(panelX + 14, panelY + 15 + rowH, dotR * 2, dotR * 2);
+  fill(255);
+  textSize(16);
+  textAlign(LEFT, CENTER);
   if (isWorn) {
-    // Green banner
-    fill(0, 150, 0, 200);
-    noStroke();
-    rect(width - 220, 5, 210, 45, 8);
-    fill(255);
-    textSize(16);
-    textAlign(CENTER, CENTER);
-    text('HEADSET ON', width - 115, 18);
-    textSize(11);
-    text(`HR: ${heartRate || '--'} BPM`, width - 115, 36);
+    text(`HEADSET: On Head (${heartRate || '--'} BPM)`, textStartX, panelY + 15 + rowH);
   } else {
-    // Red banner
-    fill(200, 0, 0, 200);
-    noStroke();
-    rect(width - 220, 5, 210, 45, 8);
-    fill(255);
-    textSize(16);
-    textAlign(CENTER, CENTER);
-    text('HEADSET OFF', width - 115, 18);
-    textSize(11);
-    text('MIDI SUPPRESSED', width - 115, 36);
+    text('HEADSET: Off Head', textStartX, panelY + 15 + rowH);
   }
-  textAlign(LEFT, TOP);
+
+  // Row 3: BELA status - green when MIDI active
+  fill(midiEnabled ? color(0, 200, 0) : color(200, 0, 0));
+  noStroke();
+  ellipse(panelX + 14, panelY + 15 + rowH * 2, dotR * 2, dotR * 2);
+  fill(255);
+  textSize(16);
+  textAlign(LEFT, CENTER);
+  text(`BELA: ${midiEnabled ? 'MIDI Active' : 'Not Connected'}`, textStartX, panelY + 15 + rowH * 2);
+
+  // Row 4: FPS (small, dimmed)
+  fill(150);
   textSize(12);
+  text(`FPS: ${displayFPS}`, textStartX, panelY + 15 + rowH * 3);
+
   pop();
 
   // Console logging - log every 30 seconds (reduced to minimize noise)

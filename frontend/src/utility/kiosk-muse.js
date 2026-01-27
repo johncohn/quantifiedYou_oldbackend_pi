@@ -163,6 +163,17 @@ class KioskMuseManager {
 
   _notifyWornListeners() {
     this.wornListeners.forEach(cb => cb(this.isWorn, this.heartRate));
+    this._sendWornStatus();
+  }
+
+  _sendWornStatus() {
+    if (this.statusSocket?.readyState === WebSocket.OPEN) {
+      this.statusSocket.send(JSON.stringify({
+        type: 'worn_status',
+        isWorn: this.isWorn,
+        timestamp: new Date().toISOString()
+      }));
+    }
   }
 
   getIsWorn() {

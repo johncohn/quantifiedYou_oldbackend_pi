@@ -5,14 +5,10 @@ LED Status Controller for YouQuantified Kiosk Mode
 Controls a WS2812B LED on GPIO18 to indicate system status.
 Receives status updates via WebSocket from the browser.
 
-Status LED Colors:
-- White fade-in: System starting
-- Yellow slow pulse: Waiting for Muse connection
-- Blue fast blink: Connecting
-- Green solid: Connected & streaming
-- Green gentle pulse: Data flowing + MIDI active
-- Blue slow pulse: Reconnecting
-- Red solid: Error
+Status LED Colors (3-color scheme):
+- Red (solid): Nothing connected (idle, searching, error, reconnecting)
+- Blue (solid): Muse connected but headset not worn
+- Green (solid): Muse streaming AND headset on head
 
 Requirements:
     pip3 install rpi_ws281x websockets
@@ -81,6 +77,7 @@ class LEDController:
     def __init__(self):
         self.strip = None
         self.current_state = ConnectionState.STARTUP
+        self.is_worn = False
         self.running = True
         self.animation_thread = None
         self.lock = threading.Lock()
@@ -121,68 +118,44 @@ class LEDController:
                 print(f"[LED] State: {self.current_state.value} -> {state.value}")
                 self.current_state = state
 
-    def _animation_loop(self):
-        """Background thread for LED animations"""
-        phase = 0
-        last_state = None
+    def set_worn(self, is_worn: bool):
+        with self.lock:
+            if self.is_worn != is_worn:
+                print(f"[LED] Worn: {self.is_worn} -> {is_worn}")
+                self.is_worn = is_worn
 
+    def _get_led_color(self, state, is_worn):
+        """Determine LED color from state and worn status.
+
+        3-color scheme:
+        - Red: nothing connected (IDLE, SEARCHING, ERROR, RECONNECTING, STARTUP)
+        - Blue: Muse connected but not worn (CONNECTING, CONNECTED, STREAMING+not worn)
+        - Green: Muse streaming AND headset on head (STREAMING+worn)
+        """
+        if state in (ConnectionState.IDLE, ConnectionState.SEARCHING,
+                     ConnectionState.ERROR, ConnectionState.RECONNECTING,
+                     ConnectionState.STARTUP):
+            return (255, 0, 0)  # Red
+        elif state == ConnectionState.STREAMING and is_worn:
+            return (0, 255, 0)  # Green
+        else:
+            # CONNECTING, CONNECTED, or STREAMING without worn
+            return (0, 0, 255)  # Blue
+
+    def _animation_loop(self):
+        """Background thread for LED color updates"""
         while self.running:
             with self.lock:
                 state = self.current_state
-
-            # Reset phase on state change
-            if state != last_state:
-                phase = 0
-                last_state = state
+                is_worn = self.is_worn
 
             try:
-                if state == ConnectionState.STARTUP:
-                    # White fade in
-                    brightness = min(1.0, phase / 50)
-                    self.set_color(255, 255, 255, brightness)
-
-                elif state == ConnectionState.IDLE:
-                    # Yellow slow pulse
-                    brightness = 0.3 + 0.7 * abs((phase % 100) - 50) / 50
-                    self.set_color(255, 255, 0, brightness)
-
-                elif state == ConnectionState.SEARCHING:
-                    # Yellow fast blink
-                    on = (phase % 20) < 10
-                    self.set_color(255, 255, 0, 1.0 if on else 0.1)
-
-                elif state == ConnectionState.CONNECTING:
-                    # Blue fast blink
-                    on = (phase % 10) < 5
-                    self.set_color(0, 100, 255, 1.0 if on else 0.1)
-
-                elif state == ConnectionState.CONNECTED:
-                    # Green solid
-                    self.set_color(0, 255, 0, 1.0)
-
-                elif state == ConnectionState.STREAMING:
-                    # Green gentle pulse (indicates data flowing)
-                    brightness = 0.7 + 0.3 * abs((phase % 60) - 30) / 30
-                    self.set_color(0, 255, 0, brightness)
-
-                elif state == ConnectionState.RECONNECTING:
-                    # Blue slow pulse
-                    brightness = 0.3 + 0.7 * abs((phase % 40) - 20) / 20
-                    self.set_color(0, 100, 255, brightness)
-
-                elif state == ConnectionState.ERROR:
-                    # Red solid
-                    self.set_color(255, 0, 0, 1.0)
-
-                else:
-                    # Unknown state - purple
-                    self.set_color(128, 0, 128, 1.0)
-
+                r, g, b = self._get_led_color(state, is_worn)
+                self.set_color(r, g, b, 1.0)
             except Exception as e:
                 print(f"[LED] Animation error: {e}")
 
-            phase += 1
-            time.sleep(0.05)  # 20 FPS animation
+            time.sleep(0.1)  # 10 Hz update rate (solid colors, no animation needed)
 
     def cleanup(self):
         """Turn off LED and cleanup"""
@@ -217,8 +190,11 @@ async def handle_websocket(websocket, path=None):
                     except ValueError:
                         print(f"[WS] Unknown state: {state_str}")
 
+                elif msg_type == 'worn_status':
+                    is_worn = data.get('isWorn', False)
+                    led.set_worn(is_worn)
+
                 elif msg_type == 'midi_status':
-                    # Could use for additional feedback
                     midi_active = data.get('active', False)
                     print(f"[WS] MIDI active: {midi_active}")
 
