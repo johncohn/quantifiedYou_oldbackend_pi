@@ -44,7 +44,7 @@ class KioskMuseManager {
     // EEG processing
     this.sfreq = 256;
     this.WINDOW_SIZE = 2;
-    this.BAND_POWERS_SFREQ = 10;
+    this.BAND_POWERS_SFREQ = 30;
     this.numberOfChannels = 4;
     this.buffer = this._createBuffer();
     this.dataArray = [];
@@ -408,6 +408,15 @@ class KioskMuseManager {
 
   async _startStreaming() {
     this.log('Starting EEG/PPG stream...');
+
+    // Reset buffers to ensure clean state (important for reconnects)
+    this.dataArray = [];
+    this.buffer = this._createBuffer();
+    this.ppgBuffer = new Array(this.PPG_WINDOW_SIZE * this.ppg_sfreq).fill(0);
+    this.ppgSampleCount = 0;
+    this.ppgChannelBuffers = { 0: [], 1: [], 2: [] };
+    this.log('Buffers reset for clean streaming state');
+
     this.log(`enablePpg before start(): ${this.muse.enablePpg}`);
     this.log(`ppgReadings exists before start(): ${!!this.muse.ppgReadings}`);
 
@@ -515,13 +524,29 @@ class KioskMuseManager {
     if (this.ppgMetricStream) {
       clearInterval(this.ppgMetricStream);
     }
+    if (this.dataWatchdog) {
+      clearInterval(this.dataWatchdog);
+    }
 
-    // EEG band power calculation (10 Hz)
+    // EEG band power calculation (30 Hz)
     this.eegMetricStream = setInterval(() => {
       if (this.state === ConnectionState.STREAMING) {
         this._calculateBandPowers();
       }
     }, (1 / this.BAND_POWERS_SFREQ) * 1000);
+
+    // Watchdog: detect stuck "connected but no data" state
+    this.lastWatchdogPpgCount = this.ppgSampleCount;
+    this.dataWatchdog = setInterval(() => {
+      if (this.state === ConnectionState.STREAMING) {
+        if (this.ppgSampleCount === this.lastWatchdogPpgCount) {
+          // No new PPG data in 5 seconds while supposedly streaming
+          this.log('WATCHDOG: No PPG data flowing while in STREAMING state, forcing reconnect...');
+          this._handleDisconnect();
+        }
+        this.lastWatchdogPpgCount = this.ppgSampleCount;
+      }
+    }, 5000);
 
     // PPG heart rate calculation (1 Hz)
     this.ppgMetricStream = setInterval(() => {
@@ -827,7 +852,7 @@ class KioskMuseManager {
     this.log('Handling disconnect...');
     this.setState(ConnectionState.RECONNECTING);
 
-    // Stop metric streams
+    // Stop metric streams and watchdog
     if (this.eegMetricStream) {
       clearInterval(this.eegMetricStream);
       this.eegMetricStream = null;
@@ -836,11 +861,28 @@ class KioskMuseManager {
       clearInterval(this.ppgMetricStream);
       this.ppgMetricStream = null;
     }
+    if (this.dataWatchdog) {
+      clearInterval(this.dataWatchdog);
+      this.dataWatchdog = null;
+    }
 
-    // Reset worn state
+    // Reset worn state and PPG counter
     this.isWorn = false;
     this.heartRate = 0;
+    this.ppgSampleCount = 0;
     this._notifyWornListeners();
+
+    // Dispatch reset to clear UI indicators
+    if (this.deviceId) {
+      store.dispatch({
+        type: "devices/streamUpdate",
+        payload: {
+          id: this.deviceId,
+          data: { ppgSampleCount: 0, isWorn: false, HR: 0 },
+          modality: "Band Powers",
+        },
+      });
+    }
 
     // Update Redux store
     if (this.deviceId) {
@@ -892,13 +934,14 @@ class KioskMuseManager {
       const success = await this._connectToDevice();
 
       if (success) {
-        this.log('Reconnected successfully! Reloading page to reset data pipeline...');
+        this.log('Reconnected successfully!');
         this.reconnectAttempts = 0;
 
-        // Reload page after brief delay to ensure clean state
-        setTimeout(() => {
-          window.location.reload();
-        }, 1000);
+        // Emit custom event so KioskAutoMapper can reset its state
+        window.dispatchEvent(new CustomEvent('muse-reconnected', {
+          detail: { deviceId: this.deviceId }
+        }));
+        this.log('Dispatched muse-reconnected event');
       } else {
         this._scheduleReconnect();
       }
