@@ -3,10 +3,26 @@
 
 KIOSK_URL="http://xenbox.local:3000/kiosk/cmk8yniz80002jibx3fh7j9ax"
 LOG_FILE="/home/xenbox/kiosk.log"
+PIDFILE="/tmp/start-kiosk.pid"
 
 log() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" | tee -a "$LOG_FILE"
 }
+
+# Kill any other instances of this script (and their chromium children)
+if [ -f "$PIDFILE" ]; then
+    OLD_PID=$(cat "$PIDFILE")
+    if [ "$OLD_PID" != "$$" ] && kill -0 "$OLD_PID" 2>/dev/null; then
+        log "Killing old kiosk instance (PID $OLD_PID)..."
+        kill "$OLD_PID" 2>/dev/null
+        sleep 2
+    fi
+fi
+echo $$ > "$PIDFILE"
+
+# Also kill any orphaned chromium from previous runs
+pkill -f chromium 2>/dev/null || true
+sleep 2
 
 export DISPLAY=:0
 export WAYLAND_DISPLAY=wayland-0
@@ -50,11 +66,6 @@ while ! curl -sf "http://localhost:3000/" > /dev/null 2>&1; do
     if [ $WAITED -ge 30 ]; then break; fi
 done
 log "Frontend ready (waited ${WAITED}s)"
-
-# Kill any leftover Chromium and clear crash state
-pkill -f chromium 2>/dev/null || true
-sleep 2
-rm -rf ~/.config/chromium/Singleton* 2>/dev/null || true
 
 while true; do
     log "Launching Chromium..."

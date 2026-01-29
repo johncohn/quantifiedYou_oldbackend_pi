@@ -227,7 +227,7 @@ const effectNames = ["Chorus", "Flanger", "Reverb", "Delay", "Distortion"];
 const eegBands = ["Alpha", "Low Beta", "High Beta", "Theta", "Gamma"];
 
 // Signal history for plotting
-const HISTORY_LENGTH = 100; // number of samples to display (reduced for faster scrolling)
+const HISTORY_LENGTH = 300; // number of samples to display (~10 seconds at 30Hz)
 let signalHistory = {
   "Alpha": [],
   "Low Beta": [],

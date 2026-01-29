@@ -536,13 +536,37 @@ class KioskMuseManager {
     }, (1 / this.BAND_POWERS_SFREQ) * 1000);
 
     // Watchdog: detect stuck "connected but no data" state
-    this.lastWatchdogPpgCount = this.ppgSampleCount;
+    // Wait 10 seconds before first check to allow connection to fully establish
+    this.watchdogStartTime = Date.now();
+    this.lastWatchdogPpgCount = -1; // -1 means first check pending
+    this.watchdogFailCount = 0;
     this.dataWatchdog = setInterval(() => {
       if (this.state === ConnectionState.STREAMING) {
+        const elapsed = Date.now() - this.watchdogStartTime;
+        if (elapsed < 10000) {
+          // Grace period - don't check yet
+          return;
+        }
+        if (this.lastWatchdogPpgCount === -1) {
+          // First check after grace period - just record current count
+          this.lastWatchdogPpgCount = this.ppgSampleCount;
+          this.log(`WATCHDOG: Grace period ended, ppgSampleCount=${this.ppgSampleCount}`);
+          return;
+        }
         if (this.ppgSampleCount === this.lastWatchdogPpgCount) {
-          // No new PPG data in 5 seconds while supposedly streaming
-          this.log('WATCHDOG: No PPG data flowing while in STREAMING state, forcing reconnect...');
-          this._handleDisconnect();
+          // No new PPG data since last check
+          this.watchdogFailCount++;
+          this.log(`WATCHDOG: No new PPG data (count still ${this.ppgSampleCount}), fail #${this.watchdogFailCount}`);
+          if (this.watchdogFailCount >= 2) {
+            // Two consecutive failures (10 seconds of no data) - force page reload
+            // This is aggressive but more reliable than trying to reconnect in-place
+            this.log('WATCHDOG: Forcing page reload due to stale data...');
+            this.watchdogFailCount = 0;
+            window.location.reload();
+          }
+        } else {
+          // Data is flowing, reset fail count
+          this.watchdogFailCount = 0;
         }
         this.lastWatchdogPpgCount = this.ppgSampleCount;
       }
