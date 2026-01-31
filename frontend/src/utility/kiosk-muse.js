@@ -119,6 +119,22 @@ class KioskMuseManager {
     } catch (e) {
       // WebSocket not available
     }
+
+    // Listen for messages from visual iframes (alpha_score from xenbox)
+    window.addEventListener('message', (event) => {
+      if (event.data?.type === 'alpha_score') {
+        this._sendAlphaScore(event.data.score);
+      }
+    });
+  }
+
+  _sendAlphaScore(score) {
+    if (this.statusSocket?.readyState === WebSocket.OPEN) {
+      this.statusSocket.send(JSON.stringify({
+        type: 'alpha_score',
+        score: score
+      }));
+    }
   }
 
   _sendStatus() {
@@ -627,6 +643,24 @@ class KioskMuseManager {
     avrg.lastPpgValue = this.lastPpgValue || 0;
     avrg.ppgVariance = this.ppgVariance || 0;
     avrg.ppgChannelStats = this.ppgChannelStats || {};
+
+    // Calculate relative alpha for LED controller (same formula as xenbox visual)
+    const alpha = avrg.Alpha || 0;
+    const sum = (avrg.Alpha || 0) + (avrg['Low beta'] || 0) + (avrg['High beta'] || 0) +
+                (avrg.Theta || 0) + (avrg.Gamma || 0);
+    if (sum > 0) {
+      const alphaRel = alpha / sum;
+      // Update running mean (adaptive baseline)
+      this.alphaN = (this.alphaN || 0) + 1;
+      this.alphaMean = (this.alphaMean || 0.2) + (alphaRel - (this.alphaMean || 0.2)) / this.alphaN;
+      // Sigmoid transform centered on personal baseline
+      const deviation = alphaRel - this.alphaMean;
+      const sensitivity = 8.0;
+      const smoothness = 6.0;
+      const alphaScore = 1 / (1 + Math.exp(-smoothness * deviation * sensitivity));
+      // Send to LED controller
+      this._sendAlphaScore(alphaScore);
+    }
 
     // Include last 100 PPG samples for graphing (downsampled from 640 in buffer)
     const ppgForGraph = [];

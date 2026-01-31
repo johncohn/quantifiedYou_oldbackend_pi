@@ -175,6 +175,61 @@ let _lastLoggedMix = -1;  // Track last logged mix value to reduce console spam
 let hasEEGData = false;    // True when Muse is sending data
 let midiStatusText = "MIDI: Not initialized";
 
+// WebSocket for LED status reporting
+let ledSocket = null;
+let lastBelaStatus = null;  // Track last sent status to avoid redundant sends
+
+function connectLEDSocket() {
+  try {
+    console.log('[LED WS] Attempting to connect to ws://localhost:8765...');
+    ledSocket = new WebSocket('ws://localhost:8765');
+    ledSocket.onopen = () => {
+      console.log('[LED WS] Connected to LED controller');
+      // Send current Bela status on connect
+      sendBelaStatus(midiEnabled);
+    };
+    ledSocket.onclose = () => {
+      console.log('[LED WS] Disconnected, reconnecting in 2s...');
+      ledSocket = null;
+      setTimeout(connectLEDSocket, 2000);
+    };
+    ledSocket.onerror = (err) => {
+      console.log('[LED WS] Error, will retry on close');
+      // Don't retry here - onclose will handle it
+    };
+  } catch (e) {
+    console.log('[LED WS] Exception:', e);
+    setTimeout(connectLEDSocket, 2000);
+  }
+}
+
+function sendBelaStatus(connected) {
+  if (ledSocket?.readyState === WebSocket.OPEN && lastBelaStatus !== connected) {
+    ledSocket.send(JSON.stringify({
+      type: 'bela_status',
+      connected: connected
+    }));
+    lastBelaStatus = connected;
+  }
+}
+
+function sendAlphaScore(score) {
+  // Use postMessage to send through parent window (kiosk-muse.js has the LED WebSocket)
+  try {
+    const message = { type: 'alpha_score', score: score };
+    // Try parent window first (for iframe), then top, then current window
+    if (window.parent && window.parent !== window) {
+      window.parent.postMessage(message, '*');
+    } else if (window.top && window.top !== window) {
+      window.top.postMessage(message, '*');
+    } else {
+      window.postMessage(message, '*');
+    }
+  } catch (e) {
+    console.log('[LED] postMessage failed:', e);
+  }
+}
+
 // MIDI parameter values for visualization (0-127 scale)
 let midiValues = {
   mix: 0,
@@ -278,6 +333,7 @@ async function initMIDI() {
             midiOutput = null;
             midiEnabled = false;
             midiStatusText = "MIDI: Bela disconnected";
+            sendBelaStatus(false);  // Notify LED controller
           }
         } else if (event.port.state === 'connected') {
           // Try to reconnect to Bela
@@ -318,6 +374,7 @@ function connectToMIDIOutput(output) {
   midiEnabled = true;
   midiStatusText = `MIDI: Connected to ${output.name}`;
   console.log(`[MIDI] Connected to: ${output.name}`);
+  sendBelaStatus(true);  // Notify LED controller
 
   // Send fixed Tone.js-matching values on connect
   setTimeout(() => {
@@ -380,6 +437,9 @@ function setup() {
   if (MIDI_CONFIG.enabled) {
     initMIDI();
   }
+
+  // Connect to LED status WebSocket
+  connectLEDSocket();
 
   // Mic selector
   navigator.mediaDevices.enumerateDevices().then(devices => {
@@ -487,6 +547,11 @@ function updateWetValues() {
 }
 
 function draw() {
+  // Send mix value to LED controller via postMessage (every 3 frames = ~20Hz)
+  if (frameCount % 3 === 0) {
+    sendAlphaScore(midiValues.mix / 127);
+  }
+
   background(240);
 
   // Track update rate
@@ -553,6 +618,7 @@ function draw() {
   const smoothness = 6.0;   // Sigmoid steepness (lower = smoother transition)
   // Sigmoid centered at 0, so positive deviation -> high output, negative -> low
   const chorus_wetVal = 1 / (1 + Math.exp(-smoothness * alphaDeviation * sensitivity));
+
 
   // Other effects use sigmoid
   const flanger_wetVal = sigmoid(lowBeta_rel);

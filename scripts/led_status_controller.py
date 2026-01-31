@@ -2,18 +2,20 @@
 """
 LED Status Controller for YouQuantified Kiosk Mode
 
-Controls a WS2812B LED on GPIO18 to indicate system status.
+Controls a 4-LED WS2812B NeoPixel strip on GPIO10 (SPI) to indicate system status.
+Uses Pi5Neo library for Raspberry Pi 5 compatibility.
 Receives status updates via WebSocket from the browser.
 
-Status LED Colors (3-color scheme):
-- Red (solid): Nothing connected (idle, searching, error, reconnecting)
-- Blue (solid): Muse connected but headset not worn
-- Green (solid): Muse streaming AND headset on head
+LED Layout:
+- LED 0: RED when Bela connected (MIDI active), dark otherwise
+- LED 1: YELLOW when Muse connected (blinks while connecting), dark when disconnected
+- LED 2: GREEN when alpha state reached (score > threshold), dark otherwise
+- LED 3: Unused (dark)
 
 Requirements:
-    pip3 install rpi_ws281x websockets
+    pip3 install pi5neo websockets
 
-Run with sudo (required for GPIO/PWM access):
+Run with sudo (required for SPI access):
     sudo python3 led_status_controller.py
 """
 
@@ -23,13 +25,22 @@ import signal
 import sys
 import time
 import threading
+import subprocess
 from enum import Enum
 
+# Configure GPIO 10 for SPI mode before importing pi5neo
 try:
-    from rpi_ws281x import PixelStrip, Color
+    subprocess.run(['pinctrl', 'set', '10', 'a0'], check=True, capture_output=True)
+    print("[LED] Configured GPIO10 for SPI mode")
+except Exception as e:
+    print(f"[LED] Warning: Could not configure GPIO10: {e}")
+
+try:
+    from pi5neo import Pi5Neo
     HAS_LED = True
-except ImportError:
-    print("[LED] rpi_ws281x not available - running in simulation mode")
+    print("[LED] Pi5Neo library loaded")
+except ImportError as e:
+    print(f"[LED] Pi5Neo not available - running in simulation mode: {e}")
     HAS_LED = False
 
 try:
@@ -40,13 +51,15 @@ except ImportError:
 
 
 # LED strip configuration
-LED_COUNT = 1           # Number of LED pixels
-LED_PIN = 18            # GPIO pin (18 uses PWM)
-LED_FREQ_HZ = 800000    # LED signal frequency in Hz
-LED_DMA = 10            # DMA channel to use
-LED_BRIGHTNESS = 128    # 0-255, start at 50%
-LED_INVERT = False      # True to invert signal
-LED_CHANNEL = 0         # PWM channel
+LED_COUNT = 3           # Number of LED pixels (3-LED strip)
+SPI_DEVICE = '/dev/spidev0.0'
+SPI_SPEED = 800         # kHz
+BRIGHTNESS = 64         # 25% brightness (64/255)
+
+
+# Alpha threshold for "alpha state" (tune this value)
+# chorus_wetVal ranges from 0-1 (sigmoid output)
+ALPHA_THRESHOLD = 0.5
 
 
 class ConnectionState(Enum):
@@ -60,63 +73,69 @@ class ConnectionState(Enum):
     STARTUP = 'startup'
 
 
-# Color definitions (GRB order for WS2812B)
-COLORS = {
-    'off': (0, 0, 0),
-    'white': (255, 255, 255),
-    'red': (0, 255, 0),       # GRB: G=0, R=255, B=0
-    'green': (255, 0, 0),     # GRB: G=255, R=0, B=0
-    'blue': (0, 0, 255),      # GRB: G=0, R=0, B=255
-    'yellow': (255, 255, 0),  # GRB: G=255, R=255, B=0
-    'orange': (165, 255, 0),  # GRB: G=165, R=255, B=0
-    'purple': (0, 128, 128),  # GRB: G=0, R=128, B=128
-}
-
-
 class LEDController:
     def __init__(self):
-        self.strip = None
-        self.current_state = ConnectionState.STARTUP
-        self.is_worn = False
+        self.neo = None
         self.running = True
         self.animation_thread = None
         self.lock = threading.Lock()
 
+        # Status tracking
+        self.bela_connected = False      # LED 0: Bela/MIDI connection
+        self.muse_state = ConnectionState.STARTUP  # LED 1: Muse connection
+        self.alpha_score = 0.0           # LED 2: Alpha state score (0-1)
+        self.is_worn = False             # Whether headband is on head
+
+        # Blink state for connecting animation
+        self.blink_state = False
+        self.blink_counter = 0
+
         if HAS_LED:
             try:
-                self.strip = PixelStrip(
-                    LED_COUNT, LED_PIN, LED_FREQ_HZ,
-                    LED_DMA, LED_INVERT, LED_BRIGHTNESS, LED_CHANNEL
-                )
-                self.strip.begin()
-                print(f"[LED] Initialized WS2812B on GPIO{LED_PIN}")
+                self.neo = Pi5Neo(SPI_DEVICE, LED_COUNT, SPI_SPEED)
+                print(f"[LED] Initialized {LED_COUNT} NeoPixels via SPI on GPIO10")
             except Exception as e:
                 print(f"[LED] Failed to initialize: {e}")
-                self.strip = None
+                self.neo = None
 
         # Start animation thread
         self.animation_thread = threading.Thread(target=self._animation_loop, daemon=True)
         self.animation_thread.start()
 
-    def set_color(self, r, g, b, brightness=1.0):
-        """Set LED color (RGB order, will be converted to GRB)"""
-        if self.strip:
-            # Apply brightness
-            r = int(r * brightness)
-            g = int(g * brightness)
-            b = int(b * brightness)
-            # WS2812B uses GRB order
-            self.strip.setPixelColor(0, Color(g, r, b))
-            self.strip.show()
+    def set_pixel(self, index, r, g, b):
+        """Set individual LED color (RGB order)"""
+        if index >= LED_COUNT:
+            return
+        if self.neo:
+            self.neo.set_led_color(index, r, g, b)
         else:
             # Simulation mode
-            print(f"[LED SIM] R={r} G={g} B={b} bright={brightness:.2f}")
+            if r > 0 or g > 0 or b > 0:
+                print(f"[LED SIM] LED{index}: R={r} G={g} B={b}")
 
-    def set_state(self, state: ConnectionState):
+    def show(self):
+        """Update the LED strip"""
+        if self.neo:
+            self.neo.update_strip()
+
+    def set_bela_connected(self, connected: bool):
         with self.lock:
-            if self.current_state != state:
-                print(f"[LED] State: {self.current_state.value} -> {state.value}")
-                self.current_state = state
+            if self.bela_connected != connected:
+                print(f"[LED] Bela connected: {self.bela_connected} -> {connected}")
+                self.bela_connected = connected
+
+    def set_muse_state(self, state: ConnectionState):
+        with self.lock:
+            if self.muse_state != state:
+                print(f"[LED] Muse state: {self.muse_state.value} -> {state.value}")
+                self.muse_state = state
+                # Default to worn=true when streaming starts (will be updated by worn_status)
+                if state == ConnectionState.STREAMING:
+                    self.is_worn = True
+
+    def set_alpha_score(self, score: float):
+        with self.lock:
+            self.alpha_score = score
 
     def set_worn(self, is_worn: bool):
         with self.lock:
@@ -124,46 +143,56 @@ class LEDController:
                 print(f"[LED] Worn: {self.is_worn} -> {is_worn}")
                 self.is_worn = is_worn
 
-    def _get_led_color(self, state, is_worn):
-        """Determine LED color from state and worn status.
-
-        3-color scheme:
-        - Red: nothing connected (IDLE, SEARCHING, ERROR, RECONNECTING, STARTUP)
-        - Blue: Muse connected but not worn (CONNECTING, CONNECTED, STREAMING+not worn)
-        - Green: Muse streaming AND headset on head (STREAMING+worn)
-        """
-        if state in (ConnectionState.IDLE, ConnectionState.SEARCHING,
-                     ConnectionState.ERROR, ConnectionState.RECONNECTING,
-                     ConnectionState.STARTUP):
-            return (255, 0, 0)  # Red
-        elif state == ConnectionState.STREAMING and is_worn:
-            return (0, 255, 0)  # Green
-        else:
-            # CONNECTING, CONNECTED, or STREAMING without worn
-            return (0, 0, 255)  # Blue
-
     def _animation_loop(self):
-        """Background thread for LED color updates"""
+        """Background thread for LED updates"""
         while self.running:
             with self.lock:
-                state = self.current_state
+                bela_connected = self.bela_connected
+                muse_state = self.muse_state
+                alpha_score = self.alpha_score
                 is_worn = self.is_worn
 
+            # Update blink state for connecting animation
+            self.blink_counter += 1
+            if self.blink_counter >= 5:  # Toggle every 500ms (5 * 100ms)
+                self.blink_counter = 0
+                self.blink_state = not self.blink_state
+
             try:
-                r, g, b = self._get_led_color(state, is_worn)
-                self.set_color(r, g, b, 1.0)
+                # Calculate all LED values
+                # LED 0: Always RED when system is running
+                led0_r, led0_g, led0_b = BRIGHTNESS, 0, 0
+
+                # LED 1: GREEN when Muse connected/streaming
+                led1_r, led1_g, led1_b = 0, 0, 0
+                if muse_state in (ConnectionState.STREAMING, ConnectionState.CONNECTED):
+                    led1_g = BRIGHTNESS
+
+                # LED 2: BLUE proportional to alpha/mix (0-127) - only when streaming AND worn
+                led2_r, led2_g, led2_b = 0, 0, 0
+                if muse_state == ConnectionState.STREAMING and is_worn:
+                    led2_b = int(alpha_score * 127)
+
+                # Set all LEDs
+                if self.neo:
+                    self.neo.set_led_color(0, led0_r, led0_g, led0_b)
+                    self.neo.set_led_color(1, led1_r, led1_g, led1_b)
+                    self.neo.set_led_color(2, led2_r, led2_g, led2_b)
+                    self.neo.update_strip()
+
             except Exception as e:
                 print(f"[LED] Animation error: {e}")
 
-            time.sleep(0.1)  # 10 Hz update rate (solid colors, no animation needed)
+            time.sleep(0.1)  # 10 Hz update rate
 
     def cleanup(self):
-        """Turn off LED and cleanup"""
+        """Turn off all LEDs and cleanup"""
         self.running = False
         if self.animation_thread:
             self.animation_thread.join(timeout=1)
-        if self.strip:
-            self.set_color(0, 0, 0)
+        if self.neo:
+            self.neo.fill_strip(0, 0, 0)
+            self.neo.update_strip()
             print("[LED] Cleanup complete")
 
 
@@ -186,17 +215,29 @@ async def handle_websocket(websocket, path=None):
                     state_str = data.get('state', 'idle')
                     try:
                         state = ConnectionState(state_str)
-                        led.set_state(state)
+                        led.set_muse_state(state)
                     except ValueError:
                         print(f"[WS] Unknown state: {state_str}")
 
                 elif msg_type == 'worn_status':
+                    # Update worn status for LED 2 control
                     is_worn = data.get('isWorn', False)
                     led.set_worn(is_worn)
 
+                elif msg_type == 'bela_status':
+                    # Bela/MIDI connection status
+                    connected = data.get('connected', False)
+                    led.set_bela_connected(connected)
+
+                elif msg_type == 'alpha_score':
+                    # Alpha state score (0-1 range)
+                    score = data.get('score', 0.0)
+                    led.set_alpha_score(score)
+
                 elif msg_type == 'midi_status':
+                    # Legacy support - treat as bela_status
                     midi_active = data.get('active', False)
-                    print(f"[WS] MIDI active: {midi_active}")
+                    led.set_bela_connected(midi_active)
 
                 else:
                     print(f"[WS] Unknown message type: {msg_type}")
@@ -211,10 +252,12 @@ async def handle_websocket(websocket, path=None):
 async def main():
     """Main entry point"""
     print("[LED Status Controller] Starting...")
+    print(f"[LED] Configuration: {LED_COUNT} LEDs on GPIO10 (SPI)")
+    print(f"[LED] Alpha threshold: {ALPHA_THRESHOLD}")
     print(f"[WS] WebSocket server listening on ws://localhost:8765")
 
     # Set initial state
-    led.set_state(ConnectionState.IDLE)
+    led.set_muse_state(ConnectionState.IDLE)
 
     # Start WebSocket server
     async with websockets.serve(handle_websocket, "localhost", 8765):
