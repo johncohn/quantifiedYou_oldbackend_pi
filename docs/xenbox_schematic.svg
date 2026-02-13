@@ -1,0 +1,314 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1100 900" font-family="monospace" font-size="12">
+  <defs>
+    <marker id="arrow" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#333"/>
+    </marker>
+    <marker id="arrow-red" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#c00"/>
+    </marker>
+    <marker id="arrow-blue" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#06c"/>
+    </marker>
+    <marker id="arrow-green" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#090"/>
+    </marker>
+    <marker id="arrow-orange" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#e80"/>
+    </marker>
+  </defs>
+
+  <!-- Title -->
+  <text x="550" y="30" text-anchor="middle" font-size="18" font-weight="bold" fill="#222">XENBOX — Wiring Schematic</text>
+  <text x="550" y="48" text-anchor="middle" font-size="11" fill="#666">Pi 5 + Bela GEM + NeoPixels + Encoders + True Bypass Stomp Switch</text>
+
+  <!-- ================================================================ -->
+  <!-- 1/4" INPUT JACK -->
+  <!-- ================================================================ -->
+  <rect x="30" y="280" width="120" height="80" rx="8" fill="#f5f0e0" stroke="#333" stroke-width="2"/>
+  <text x="90" y="302" text-anchor="middle" font-size="13" font-weight="bold">1/4" INPUT</text>
+  <text x="90" y="318" text-anchor="middle" font-size="10" fill="#555">From guitar/source</text>
+  <circle cx="60" cy="340" r="4" fill="#c00"/>
+  <text x="72" y="344" font-size="10" fill="#c00">Tip (signal)</text>
+  <circle cx="60" cy="355" r="4" fill="#333"/>
+  <text x="72" y="359" font-size="10" fill="#333">Sleeve (GND)</text>
+
+  <!-- ================================================================ -->
+  <!-- BELA GEM -->
+  <!-- ================================================================ -->
+  <rect x="340" y="200" width="200" height="160" rx="10" fill="#e8f0ff" stroke="#06c" stroke-width="2.5"/>
+  <text x="440" y="225" text-anchor="middle" font-size="14" font-weight="bold" fill="#06c">BELA GEM</text>
+  <text x="440" y="242" text-anchor="middle" font-size="10" fill="#555">Audio Effects Processor</text>
+
+  <!-- Bela inputs -->
+  <text x="350" y="275" font-size="10" fill="#555">1/8" IN</text>
+  <circle cx="355" cy="285" r="4" fill="#c00"/>
+  <text x="365" y="289" font-size="9">Tip</text>
+  <circle cx="355" cy="300" r="4" fill="#333"/>
+  <text x="365" y="304" font-size="9">Slv</text>
+
+  <!-- Bela outputs -->
+  <text x="490" y="275" font-size="10" fill="#555">1/8" OUT</text>
+  <circle cx="530" cy="285" r="4" fill="#090"/>
+  <text x="500" y="289" font-size="9">Tip</text>
+  <circle cx="530" cy="300" r="4" fill="#333"/>
+  <text x="500" y="304" font-size="9">Slv</text>
+
+  <!-- Bela USB -->
+  <text x="440" y="335" text-anchor="middle" font-size="10" fill="#555">USB-C (to Pi 5)</text>
+  <rect x="410" y="340" width="60" height="16" rx="4" fill="#ddd" stroke="#666"/>
+  <text x="440" y="352" text-anchor="middle" font-size="9">USB-C</text>
+
+  <!-- ================================================================ -->
+  <!-- 3PDT STOMP SWITCH -->
+  <!-- ================================================================ -->
+  <rect x="620" y="240" width="180" height="200" rx="10" fill="#fff5e5" stroke="#e80" stroke-width="2.5"/>
+  <text x="710" y="265" text-anchor="middle" font-size="13" font-weight="bold" fill="#e80">3PDT STOMP</text>
+  <text x="710" y="280" text-anchor="middle" font-size="10" fill="#888">Latching, True Bypass</text>
+
+  <!-- Pole 1: Output signal switching -->
+  <text x="635" y="305" font-size="10" font-weight="bold" fill="#555">Pole 1 (Signal)</text>
+  <circle cx="645" cy="318" r="3" fill="#c00"/>
+  <text x="655" y="322" font-size="9">A: Input Tip</text>
+  <circle cx="645" cy="335" r="5" fill="#333" stroke="#e80" stroke-width="2"/>
+  <text x="655" y="339" font-size="9" font-weight="bold">C: Output Tip</text>
+  <circle cx="645" cy="352" r="3" fill="#090"/>
+  <text x="655" y="356" font-size="9">B: GEM Out Tip</text>
+
+  <!-- Pole 2: Ground (optional / LED) -->
+  <text x="635" y="378" font-size="10" font-weight="bold" fill="#555">Pole 2 (LED)</text>
+  <circle cx="645" cy="391" r="3" fill="#555"/>
+  <text x="655" y="395" font-size="9">A: LED GND</text>
+  <circle cx="645" cy="405" r="5" fill="#333" stroke="#e80" stroke-width="2"/>
+  <text x="655" y="409" font-size="9" font-weight="bold">C: LED cathode</text>
+  <circle cx="645" cy="419" r="3" fill="#555"/>
+  <text x="655" y="423" font-size="9">B: (open)</text>
+
+  <!-- State labels -->
+  <text x="710" y="445" text-anchor="middle" font-size="9" fill="#e80">Position A = BYPASS</text>
+  <text x="710" y="456" text-anchor="middle" font-size="9" fill="#e80">Position B = EFFECT</text>
+
+  <!-- ================================================================ -->
+  <!-- 1/4" OUTPUT JACK -->
+  <!-- ================================================================ -->
+  <rect x="880" y="280" width="120" height="80" rx="8" fill="#e5f5e5" stroke="#333" stroke-width="2"/>
+  <text x="940" y="302" text-anchor="middle" font-size="13" font-weight="bold">1/4" OUTPUT</text>
+  <text x="940" y="318" text-anchor="middle" font-size="10" fill="#555">To amp/speaker</text>
+  <circle cx="910" cy="340" r="4" fill="#090"/>
+  <text x="922" y="344" font-size="10" fill="#090">Tip (signal)</text>
+  <circle cx="910" cy="355" r="4" fill="#333"/>
+  <text x="922" y="359" font-size="10" fill="#333">Sleeve (GND)</text>
+
+  <!-- ================================================================ -->
+  <!-- RASPBERRY PI 5 -->
+  <!-- ================================================================ -->
+  <rect x="220" y="520" width="380" height="250" rx="10" fill="#f0e8f8" stroke="#609" stroke-width="2.5"/>
+  <text x="410" y="545" text-anchor="middle" font-size="14" font-weight="bold" fill="#609">RASPBERRY PI 5</text>
+
+  <!-- GPIO Header pinout table -->
+  <text x="235" y="565" font-size="11" font-weight="bold" fill="#609">GPIO Header Pins Used:</text>
+
+  <!-- Pin 1: 3.3V → Encoder VCC -->
+  <rect x="235" y="570" width="350" height="16" rx="2" fill="#fff8f0"/>
+  <text x="240" y="582" font-size="10" fill="#e80" font-weight="bold">Pin 1</text>
+  <text x="285" y="582" font-size="10" fill="#555">3.3V Power</text>
+  <text x="440" y="582" font-size="10" fill="#e80">→ Encoder Board VCC</text>
+
+  <!-- Pin 2: 5V Power → NeoPixel VCC -->
+  <rect x="235" y="589" width="350" height="16" rx="2" fill="#f8f0ff"/>
+  <text x="240" y="601" font-size="10" fill="#c33" font-weight="bold">Pin 2</text>
+  <text x="285" y="601" font-size="10" fill="#555">5V Power</text>
+  <text x="440" y="601" font-size="10" fill="#c33">→ NeoPixel 5V</text>
+
+  <!-- Pin 3: SDA1 → Encoder SDA -->
+  <rect x="235" y="608" width="350" height="16" rx="2" fill="#fff8f0"/>
+  <text x="240" y="620" font-size="10" fill="#e80" font-weight="bold">Pin 3</text>
+  <text x="285" y="620" font-size="10" fill="#555">GPIO2 (I2C1 SDA)</text>
+  <text x="440" y="620" font-size="10" fill="#e80">→ Encoder Board SDA</text>
+
+  <!-- Pin 5: SCL1 → Encoder SCL -->
+  <rect x="235" y="627" width="350" height="16" rx="2" fill="#fff8f0"/>
+  <text x="240" y="639" font-size="10" fill="#e80" font-weight="bold">Pin 5</text>
+  <text x="285" y="639" font-size="10" fill="#555">GPIO3 (I2C1 SCL)</text>
+  <text x="440" y="639" font-size="10" fill="#e80">→ Encoder Board SCL</text>
+
+  <!-- Pin 6: GND → NeoPixel GND -->
+  <rect x="235" y="646" width="350" height="16" rx="2" fill="#f8f0ff"/>
+  <text x="240" y="658" font-size="10" fill="#333" font-weight="bold">Pin 6</text>
+  <text x="285" y="658" font-size="10" fill="#555">GND</text>
+  <text x="440" y="658" font-size="10" fill="#333">→ NeoPixel GND</text>
+
+  <!-- Pin 9: GND → Encoder GND -->
+  <rect x="235" y="665" width="350" height="16" rx="2" fill="#fff8f0"/>
+  <text x="240" y="677" font-size="10" fill="#333" font-weight="bold">Pin 9</text>
+  <text x="285" y="677" font-size="10" fill="#555">GND</text>
+  <text x="440" y="677" font-size="10" fill="#333">→ Encoder Board GND</text>
+
+  <!-- Pin 19: GPIO10 / SPI0_MOSI → NeoPixel DIN -->
+  <rect x="235" y="684" width="350" height="16" rx="2" fill="#f8f0ff"/>
+  <text x="240" y="696" font-size="10" fill="#c33" font-weight="bold">Pin 19</text>
+  <text x="285" y="696" font-size="10" fill="#555">GPIO10 (SPI0_MOSI)</text>
+  <text x="440" y="696" font-size="10" fill="#c33">→ NeoPixel DIN</text>
+
+  <!-- Separator -->
+  <line x1="240" y1="706" x2="580" y2="706" stroke="#ccc" stroke-width="1"/>
+
+  <!-- USB Ports -->
+  <text x="235" y="722" font-size="11" font-weight="bold" fill="#609">USB Ports:</text>
+  <text x="240" y="737" font-size="10" fill="#555">USB-A (upper left)</text>
+  <text x="400" y="737" font-size="10" fill="#06c">→ Bela GEM (MIDI + power)</text>
+  <text x="240" y="752" font-size="10" fill="#555">USB-A (upper right)</text>
+  <text x="400" y="752" font-size="10" fill="#555">→ TP-Link UB500 (Bluetooth)</text>
+  <text x="240" y="767" font-size="10" fill="#555">USB-A (lower)</text>
+  <text x="400" y="767" font-size="10" fill="#555">→ Realtek WiFi dongle</text>
+
+  <!-- ================================================================ -->
+  <!-- NEOPIXELS -->
+  <!-- ================================================================ -->
+  <rect x="680" y="530" width="160" height="130" rx="10" fill="#ffe8e8" stroke="#c33" stroke-width="2"/>
+  <text x="760" y="555" text-anchor="middle" font-size="13" font-weight="bold" fill="#c33">3x WS2812B</text>
+  <text x="760" y="570" text-anchor="middle" font-size="10" fill="#555">NeoPixel Strip</text>
+
+  <!-- LED indicators -->
+  <circle cx="710" cy="590" r="6" fill="#c00"/>
+  <text x="724" y="594" font-size="10">LED 0: Red (power)</text>
+  <circle cx="710" cy="610" r="6" fill="#0a0"/>
+  <text x="724" y="614" font-size="10">LED 1: Green (Muse)</text>
+  <circle cx="710" cy="630" r="6" fill="#06f"/>
+  <text x="724" y="634" font-size="10">LED 2: Blue (alpha)</text>
+
+  <!-- NeoPixel pins -->
+  <text x="695" y="655" font-size="9" fill="#555">DIN | 5V | GND</text>
+
+  <!-- ================================================================ -->
+  <!-- ROTARY ENCODERS -->
+  <!-- ================================================================ -->
+  <rect x="680" y="690" width="280" height="160" rx="10" fill="#fff5e0" stroke="#e80" stroke-width="2.5"/>
+  <text x="820" y="715" text-anchor="middle" font-size="13" font-weight="bold" fill="#e80">Adafruit Quad Encoder</text>
+  <text x="820" y="730" text-anchor="middle" font-size="10" fill="#555">I2C Breakout (Product 5752)</text>
+  <text x="820" y="745" text-anchor="middle" font-size="10" fill="#888">I2C Address: 0x49</text>
+
+  <!-- Encoder knobs -->
+  <circle cx="720" cy="775" r="14" fill="#ffe0b0" stroke="#e80" stroke-width="2"/>
+  <text x="720" y="779" text-anchor="middle" font-size="8" font-weight="bold">GAIN</text>
+  <text x="720" y="800" text-anchor="middle" font-size="8" fill="#555">CC5</text>
+
+  <circle cx="810" cy="775" r="14" fill="#ffe0b0" stroke="#e80" stroke-width="2"/>
+  <text x="810" y="779" text-anchor="middle" font-size="8" font-weight="bold">DEPTH</text>
+  <text x="810" y="800" text-anchor="middle" font-size="8" fill="#555">CC2</text>
+
+  <circle cx="900" cy="775" r="14" fill="#ffe0b0" stroke="#e80" stroke-width="2"/>
+  <text x="900" y="779" text-anchor="middle" font-size="8" font-weight="bold">THRESH</text>
+  <text x="900" y="800" text-anchor="middle" font-size="8" fill="#555">Sensitivity</text>
+
+  <!-- Encoder board connection labels -->
+  <text x="700" y="835" font-size="9" fill="#e80">STEMMA QT: SDA SCL 3.3V GND</text>
+  <text x="700" y="848" font-size="9" fill="#555">Button press = save to flash</text>
+
+  <!-- ================================================================ -->
+  <!-- WIRING — Audio signal path -->
+  <!-- ================================================================ -->
+
+  <!-- Input Tip → split node -->
+  <circle cx="220" cy="340" r="5" fill="#c00"/>
+  <line x1="150" y1="340" x2="220" y2="340" stroke="#c00" stroke-width="2"/>
+
+  <!-- Split node → Bela GEM 1/8" input tip -->
+  <path d="M220,340 L220,285 L351,285" stroke="#c00" stroke-width="2" fill="none" marker-end="url(#arrow-red)"/>
+  <text x="230" y="278" font-size="9" fill="#c00">Always connected</text>
+
+  <!-- Split node → 3PDT Pole 1 position A (bypass) -->
+  <path d="M220,340 L220,318 L642,318" stroke="#c00" stroke-width="1.5" fill="none" stroke-dasharray="6,3" marker-end="url(#arrow-red)"/>
+  <text x="400" y="312" font-size="9" fill="#c00">Bypass path</text>
+
+  <!-- GEM output tip → 3PDT Pole 1 position B (effect) -->
+  <path d="M534,285 L590,285 L590,352 L642,352" stroke="#090" stroke-width="2" fill="none" marker-end="url(#arrow-green)"/>
+  <text x="560" y="370" font-size="9" fill="#090">Effect path</text>
+
+  <!-- 3PDT Pole 1 common → Output Jack Tip -->
+  <path d="M800,335 L880,335 L880,340 L906,340" stroke="#333" stroke-width="2.5" fill="none" marker-end="url(#arrow)"/>
+
+  <!-- Ground bus -->
+  <line x1="60" y1="355" x2="60" y2="490" stroke="#333" stroke-width="1.5" stroke-dasharray="4,2"/>
+  <line x1="60" y1="490" x2="910" y2="490" stroke="#333" stroke-width="1.5" stroke-dasharray="4,2"/>
+  <line x1="910" y1="490" x2="910" y2="355" stroke="#333" stroke-width="1.5" stroke-dasharray="4,2"/>
+  <line x1="355" y1="300" x2="355" y2="490" stroke="#333" stroke-width="1" stroke-dasharray="4,2"/>
+  <line x1="530" y1="300" x2="530" y2="490" stroke="#333" stroke-width="1" stroke-dasharray="4,2"/>
+  <text x="480" y="505" text-anchor="middle" font-size="10" fill="#666">Common Ground Bus (all sleeves + GND tied together)</text>
+
+  <!-- ================================================================ -->
+  <!-- WIRING — Pi USB-A to Bela USB-C -->
+  <!-- ================================================================ -->
+  <path d="M410,520 L410,356" stroke="#609" stroke-width="2" fill="none" marker-end="url(#arrow)"/>
+  <text x="416" y="450" font-size="9" fill="#609">USB-A → USB-C</text>
+  <text x="416" y="462" font-size="9" fill="#609">(MIDI + Power)</text>
+
+  <!-- ================================================================ -->
+  <!-- WIRING — Pi Pin 19 (GPIO10) to NeoPixel DIN -->
+  <!-- ================================================================ -->
+  <path d="M600,696 L640,696 L640,590 L704,590" stroke="#c33" stroke-width="2" fill="none" marker-end="url(#arrow)"/>
+  <text x="645" y="650" font-size="9" fill="#c33">Pin 19 (GPIO10)</text>
+
+  <!-- Pi Pin 2 (5V) + Pin 6 (GND) to NeoPixels -->
+  <path d="M600,601 L660,601 L660,655 L695,655" stroke="#c33" stroke-width="1.5" fill="none" stroke-dasharray="4,2"/>
+  <text x="648" y="635" font-size="9" fill="#c33">5V+GND</text>
+
+  <!-- ================================================================ -->
+  <!-- WIRING — Pi I2C to Encoder Board -->
+  <!-- ================================================================ -->
+  <path d="M600,620 L660,620 L660,730 L680,730" stroke="#e80" stroke-width="2" fill="none" marker-end="url(#arrow-orange)"/>
+  <text x="655" y="680" font-size="9" fill="#e80">Pin 3 (SDA)</text>
+
+  <path d="M600,639 L650,639 L650,745 L680,745" stroke="#e80" stroke-width="2" fill="none" stroke-dasharray="6,3" marker-end="url(#arrow-orange)"/>
+  <text x="628" y="700" font-size="9" fill="#e80">Pin 5 (SCL)</text>
+
+  <!-- I2C power (3.3V + GND) -->
+  <path d="M600,582 L670,582 L670,690" stroke="#e80" stroke-width="1.5" fill="none" stroke-dasharray="4,2"/>
+  <text x="648" y="578" font-size="8" fill="#e80">Pin 1 (3.3V)</text>
+  <path d="M600,677 L665,677 L665,690" stroke="#333" stroke-width="1.5" fill="none" stroke-dasharray="4,2"/>
+  <text x="618" y="688" font-size="8" fill="#333">Pin 9 (GND)</text>
+
+  <!-- ================================================================ -->
+  <!-- WIRING — 3PDT Pole 1 Common to Output -->
+  <!-- ================================================================ -->
+  <path d="M645,335 L800,335" stroke="#333" stroke-width="2.5" fill="none"/>
+
+  <!-- ================================================================ -->
+  <!-- LEGEND -->
+  <!-- ================================================================ -->
+  <rect x="30" y="70" width="280" height="155" rx="8" fill="#fafafa" stroke="#ccc"/>
+  <text x="45" y="90" font-size="12" font-weight="bold" fill="#333">Signal Flow Legend</text>
+
+  <line x1="45" y1="108" x2="85" y2="108" stroke="#c00" stroke-width="2"/>
+  <text x="92" y="112" font-size="10">Audio input signal (always to GEM)</text>
+
+  <line x1="45" y1="128" x2="85" y2="128" stroke="#c00" stroke-width="1.5" stroke-dasharray="6,3"/>
+  <text x="92" y="132" font-size="10">Bypass path (input → output direct)</text>
+
+  <line x1="45" y1="148" x2="85" y2="148" stroke="#090" stroke-width="2"/>
+  <text x="92" y="152" font-size="10">Effect path (GEM output → output)</text>
+
+  <line x1="45" y1="168" x2="85" y2="168" stroke="#333" stroke-width="1.5" stroke-dasharray="4,2"/>
+  <text x="92" y="172" font-size="10">Ground bus</text>
+
+  <line x1="45" y1="188" x2="85" y2="188" stroke="#609" stroke-width="2"/>
+  <text x="92" y="192" font-size="10">USB / Digital (Pi ↔ Bela, Pi → LEDs)</text>
+
+  <line x1="45" y1="208" x2="85" y2="208" stroke="#e80" stroke-width="2"/>
+  <text x="92" y="212" font-size="10">I2C (Pi → Encoder Board)</text>
+
+  <!-- ================================================================ -->
+  <!-- NOTES -->
+  <!-- ================================================================ -->
+  <rect x="700" y="70" width="370" height="170" rx="8" fill="#fafafa" stroke="#ccc"/>
+  <text x="715" y="90" font-size="12" font-weight="bold" fill="#333">Notes</text>
+  <text x="715" y="110" font-size="10" fill="#555">1. Input ALWAYS feeds Bela GEM (even in bypass)</text>
+  <text x="715" y="126" font-size="10" fill="#555">2. 3PDT Pole 1 switches output between bypass/effect</text>
+  <text x="715" y="142" font-size="10" fill="#555">3. 3PDT Pole 2 available for bypass indicator LED</text>
+  <text x="715" y="158" font-size="10" fill="#555">4. 1/4" ↔ 1/8" needs adapter cables or solder adapters</text>
+  <text x="715" y="174" font-size="10" fill="#555">5. NeoPixels need 5V; Encoder board needs 3.3V</text>
+  <text x="715" y="190" font-size="10" fill="#555">6. Encoder board via STEMMA QT or direct I2C wires</text>
+  <text x="715" y="206" font-size="10" fill="#555">7. Encoder button press saves gain/depth/thresh to flash
+</text>
+  <text x="715" y="222" font-size="10" fill="#555">8. I2C clock reduced to 50kHz for signal integrity</text>
+
+</svg>

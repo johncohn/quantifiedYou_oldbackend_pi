@@ -1,19 +1,25 @@
 #!/usr/bin/env python3
 """
-LED Status Controller for YouQuantified Kiosk Mode
+LED Status Controller + Rotary Encoder Service for YouQuantified Kiosk Mode
 
-Controls a 4-LED WS2812B NeoPixel strip on GPIO10 (SPI) to indicate system status.
+Controls a 3-LED WS2812B NeoPixel strip on GPIO10 (SPI) to indicate system status.
+Reads 3 rotary encoders from Adafruit I2C Quad Rotary Encoder Breakout (Product ID 5752).
 Uses Pi5Neo library for Raspberry Pi 5 compatibility.
-Receives status updates via WebSocket from the browser.
+Communicates bidirectionally with the browser via WebSocket.
 
 LED Layout:
-- LED 0: RED when Bela connected (MIDI active), dark otherwise
-- LED 1: YELLOW when Muse connected (blinks while connecting), dark when disconnected
-- LED 2: GREEN when alpha state reached (score > threshold), dark otherwise
-- LED 3: Unused (dark)
+- LED 0: RED always (system running)
+- LED 1: GREEN when Muse connected/streaming
+- LED 2: BLUE proportional to alpha score (when streaming + worn)
+
+Encoder Layout (Adafruit Quad Encoder Breakout, I2C addr 0x49):
+- Encoder 0: Chorus gain (CC5, 0-127, default 100)
+- Encoder 1: Chorus depth (CC2, 0-127, default 64)
+- Encoder 2: EEG threshold/sensitivity (0-127, default 64)
+- Any button press: Save all values to /home/xenbox/encoder_settings.json
 
 Requirements:
-    pip3 install pi5neo websockets
+    pip3 install pi5neo websockets adafruit-circuitpython-seesaw
 
 Run with sudo (required for SPI access):
     sudo python3 led_status_controller.py
@@ -21,6 +27,7 @@ Run with sudo (required for SPI access):
 
 import asyncio
 import json
+import os
 import signal
 import sys
 import time
@@ -49,6 +56,18 @@ except ImportError:
     print("ERROR: websockets not installed. Run: pip3 install websockets")
     sys.exit(1)
 
+# Try to import encoder libraries
+try:
+    import board
+    from adafruit_seesaw.seesaw import Seesaw
+    from adafruit_seesaw.rotaryio import IncrementalEncoder
+    from adafruit_seesaw.digitalio import DigitalIO
+    HAS_ENCODER = True
+    print("[ENC] Adafruit seesaw library loaded")
+except ImportError as e:
+    print(f"[ENC] Seesaw not available - running without encoders: {e}")
+    HAS_ENCODER = False
+
 
 # LED strip configuration
 LED_COUNT = 3           # Number of LED pixels (3-LED strip)
@@ -56,10 +75,18 @@ SPI_DEVICE = '/dev/spidev0.0'
 SPI_SPEED = 800         # kHz
 BRIGHTNESS = 64         # 25% brightness (64/255)
 
+# Encoder configuration
+ENCODER_I2C_ADDR = 0x49  # Default address for Adafruit Quad Encoder Breakout
+ENCODER_COUNT = 3         # Using 3 of 4 available encoders (indices 1, 2, 3; skipping 0)
+ENCODER_INDICES = [1, 2, 3]  # Which encoder slots on the quad breakout to use
+SETTINGS_FILE = '/home/xenbox/encoder_settings.json'
 
-# Alpha threshold for "alpha state" (tune this value)
-# chorus_wetVal ranges from 0-1 (sigmoid output)
-ALPHA_THRESHOLD = 0.5
+# Default encoder values (0-127 MIDI range)
+DEFAULT_ENCODER_VALUES = {
+    'gain': 100,       # Encoder 0: Chorus gain (CC5)
+    'depth': 64,       # Encoder 1: Chorus depth (CC2)
+    'threshold': 64    # Encoder 2: EEG sensitivity
+}
 
 
 class ConnectionState(Enum):
@@ -90,6 +117,26 @@ class LEDController:
         self.blink_state = False
         self.blink_counter = 0
 
+        # Save flash animation state
+        self.flash_save = False
+        self.flash_counter = 0
+
+        # Encoder state
+        self.encoder_values = dict(DEFAULT_ENCODER_VALUES)
+        self.seesaw = None
+        self.encoders = []
+        self.buttons = []
+        self.last_positions = [0, 0, 0]
+        self.stable_positions = [0, 0, 0]  # Debounced positions
+        self.stable_count = [0, 0, 0]      # How many reads at same position
+        self.button_was_pressed = [True, True, True]  # Start True to debounce startup
+
+        # Connected WebSocket clients (for sending encoder values)
+        self.ws_clients = set()
+
+        # Load saved encoder values
+        self._load_encoder_settings()
+
         if HAS_LED:
             try:
                 self.neo = Pi5Neo(SPI_DEVICE, LED_COUNT, SPI_SPEED)
@@ -98,25 +145,69 @@ class LEDController:
                 print(f"[LED] Failed to initialize: {e}")
                 self.neo = None
 
+        # Initialize encoders
+        if HAS_ENCODER:
+            self._init_encoders()
+
         # Start animation thread
         self.animation_thread = threading.Thread(target=self._animation_loop, daemon=True)
         self.animation_thread.start()
 
-    def set_pixel(self, index, r, g, b):
-        """Set individual LED color (RGB order)"""
-        if index >= LED_COUNT:
-            return
-        if self.neo:
-            self.neo.set_led_color(index, r, g, b)
-        else:
-            # Simulation mode
-            if r > 0 or g > 0 or b > 0:
-                print(f"[LED SIM] LED{index}: R={r} G={g} B={b}")
+    def _init_encoders(self):
+        """Initialize I2C encoders via Adafruit seesaw"""
+        try:
+            i2c = board.I2C()
+            self.seesaw = Seesaw(i2c, addr=ENCODER_I2C_ADDR)
+            product_id = (self.seesaw.get_version() >> 16) & 0xFFFF
+            print(f"[ENC] Seesaw product ID: {product_id}")
 
-    def show(self):
-        """Update the LED strip"""
-        if self.neo:
-            self.neo.update_strip()
+            for i, enc_idx in enumerate(ENCODER_INDICES):
+                enc = IncrementalEncoder(self.seesaw, encoder=enc_idx)
+                btn = DigitalIO(self.seesaw, pin=12 + enc_idx)  # Button pins: 12, 13, 14, 15
+                btn.switch_to_input(pull=True)  # Input with pull-up
+                self.encoders.append(enc)
+                self.buttons.append(btn)
+                self.last_positions[i] = enc.position
+
+            # Set initial encoder positions to match loaded values
+            keys = ['gain', 'depth', 'threshold']
+            for i, key in enumerate(keys):
+                # Convert 0-127 value to encoder position
+                self.last_positions[i] = self.encoders[i].position
+            print(f"[ENC] Initialized {ENCODER_COUNT} encoders at I2C 0x{ENCODER_I2C_ADDR:02X}")
+            print(f"[ENC] Loaded values: {self.encoder_values}")
+        except Exception as e:
+            print(f"[ENC] Failed to initialize encoders: {e}")
+            self.seesaw = None
+            self.encoders = []
+            self.buttons = []
+
+    def _load_encoder_settings(self):
+        """Load saved encoder values from JSON file"""
+        try:
+            with open(SETTINGS_FILE, 'r') as f:
+                saved = json.load(f)
+                for key in DEFAULT_ENCODER_VALUES:
+                    if key in saved:
+                        self.encoder_values[key] = max(0, min(127, int(saved[key])))
+                print(f"[ENC] Loaded settings from {SETTINGS_FILE}: {self.encoder_values}")
+        except FileNotFoundError:
+            print(f"[ENC] No saved settings, using defaults: {self.encoder_values}")
+        except Exception as e:
+            print(f"[ENC] Error loading settings: {e}, using defaults")
+
+    def _save_encoder_settings(self):
+        """Save current encoder values to JSON file"""
+        try:
+            with open(SETTINGS_FILE, 'w') as f:
+                json.dump(self.encoder_values, f, indent=2)
+            print(f"[ENC] Saved settings to {SETTINGS_FILE}: {self.encoder_values}")
+            # Trigger LED flash to confirm save
+            with self.lock:
+                self.flash_save = True
+                self.flash_counter = 0
+        except Exception as e:
+            print(f"[ENC] Error saving settings: {e}")
 
     def set_bela_connected(self, connected: bool):
         with self.lock:
@@ -129,7 +220,6 @@ class LEDController:
             if self.muse_state != state:
                 print(f"[LED] Muse state: {self.muse_state.value} -> {state.value}")
                 self.muse_state = state
-                # Default to worn=true when streaming starts (will be updated by worn_status)
                 if state == ConnectionState.STREAMING:
                     self.is_worn = True
 
@@ -143,23 +233,117 @@ class LEDController:
                 print(f"[LED] Worn: {self.is_worn} -> {is_worn}")
                 self.is_worn = is_worn
 
+    def _poll_encoders(self):
+        """Poll encoder positions and buttons, return True if values changed.
+        Uses debouncing: position must be stable for 3 consecutive reads."""
+        if not self.encoders:
+            return False
+
+        changed = False
+        keys = ['gain', 'depth', 'threshold']
+        DEBOUNCE_READS = 2  # Must hold same position for 2 polls
+
+        try:
+            for i in range(ENCODER_COUNT):
+                # Read encoder position
+                pos = self.encoders[i].position
+
+                # Ignore I2C corruption: any absolute value > 1000 is noise
+                if abs(pos) > 1000:
+                    continue
+
+                # Ignore wild jumps from last known-good position
+                # (don't update last_positions — that was causing ping-pong with noise)
+                if abs(pos - self.last_positions[i]) > 50:
+                    continue
+
+                # Debounce: track how many reads at this position
+                if pos == self.stable_positions[i]:
+                    self.stable_count[i] += 1
+                else:
+                    self.stable_positions[i] = pos
+                    self.stable_count[i] = 1
+
+                # Only apply change after stable for DEBOUNCE_READS polls
+                if self.stable_count[i] == DEBOUNCE_READS:
+                    delta = pos - self.last_positions[i]
+                    if delta != 0:
+                        self.last_positions[i] = pos
+                        old_val = self.encoder_values[keys[i]]
+                        new_val = max(0, min(127, old_val + delta))
+                        if new_val != old_val:
+                            self.encoder_values[keys[i]] = new_val
+                            print(f"[ENC] {keys[i]}: {old_val} -> {new_val}")
+                            changed = True
+
+                # Read button (active low) — also debounce
+                pressed = not self.buttons[i].value
+                if pressed and not self.button_was_pressed[i]:
+                    print(f"[ENC] Button {i} pressed - saving settings")
+                    self._save_encoder_settings()
+                self.button_was_pressed[i] = pressed
+
+        except Exception as e:
+            print(f"[ENC] Poll error: {e}")
+
+        return changed
+
+    def _broadcast_encoder_values(self):
+        """Send current encoder values to all connected WebSocket clients"""
+        if not self.ws_clients:
+            return
+        message = json.dumps({
+            'type': 'encoder_values',
+            'gain': self.encoder_values['gain'],
+            'depth': self.encoder_values['depth'],
+            'threshold': self.encoder_values['threshold']
+        })
+        # Schedule sends on the event loop
+        disconnected = set()
+        for ws in self.ws_clients:
+            try:
+                asyncio.run_coroutine_threadsafe(ws.send(message), self._loop)
+            except Exception as e:
+                print(f"[ENC] Broadcast error: {e}")
+                disconnected.add(ws)
+        self.ws_clients -= disconnected
+
     def _animation_loop(self):
-        """Background thread for LED updates"""
+        """Background thread for LED updates and encoder polling"""
         while self.running:
             with self.lock:
-                bela_connected = self.bela_connected
                 muse_state = self.muse_state
                 alpha_score = self.alpha_score
                 is_worn = self.is_worn
+                flash_save = self.flash_save
 
-            # Update blink state for connecting animation
+            # Update blink state
             self.blink_counter += 1
-            if self.blink_counter >= 5:  # Toggle every 500ms (5 * 100ms)
+            if self.blink_counter >= 5:
                 self.blink_counter = 0
                 self.blink_state = not self.blink_state
 
+            # Poll encoders
+            encoder_changed = self._poll_encoders()
+            if encoder_changed:
+                self._broadcast_encoder_values()
+
             try:
-                # Calculate all LED values
+                # Handle save flash animation (white flash for 500ms)
+                if flash_save:
+                    self.flash_counter += 1
+                    if self.flash_counter <= 5:  # 500ms white flash
+                        if self.neo:
+                            for i in range(LED_COUNT):
+                                self.neo.set_led_color(i, BRIGHTNESS, BRIGHTNESS, BRIGHTNESS)
+                            self.neo.update_strip()
+                        time.sleep(0.1)
+                        continue
+                    else:
+                        with self.lock:
+                            self.flash_save = False
+                            self.flash_counter = 0
+
                 # LED 0: Always RED when system is running
                 led0_r, led0_g, led0_b = BRIGHTNESS, 0, 0
 
@@ -168,12 +352,11 @@ class LEDController:
                 if muse_state in (ConnectionState.STREAMING, ConnectionState.CONNECTED):
                     led1_g = BRIGHTNESS
 
-                # LED 2: BLUE proportional to alpha/mix (0-127) - only when streaming AND worn
+                # LED 2: BLUE proportional to alpha/mix - only when streaming AND worn
                 led2_r, led2_g, led2_b = 0, 0, 0
                 if muse_state == ConnectionState.STREAMING and is_worn:
                     led2_b = int(alpha_score * 127)
 
-                # Set all LEDs
                 if self.neo:
                     self.neo.set_led_color(0, led0_r, led0_g, led0_b)
                     self.neo.set_led_color(1, led1_r, led1_g, led1_b)
@@ -205,6 +388,21 @@ async def handle_websocket(websocket, path=None):
     client_addr = websocket.remote_address
     print(f"[WS] Client connected: {client_addr}")
 
+    # Track this client for encoder broadcasts
+    led.ws_clients.add(websocket)
+
+    # Send current encoder values to newly connected client
+    try:
+        await websocket.send(json.dumps({
+            'type': 'encoder_values',
+            'gain': led.encoder_values['gain'],
+            'depth': led.encoder_values['depth'],
+            'threshold': led.encoder_values['threshold']
+        }))
+        print(f"[WS] Sent initial encoder values to {client_addr}")
+    except Exception as e:
+        print(f"[WS] Error sending initial values: {e}")
+
     try:
         async for message in websocket:
             try:
@@ -220,22 +418,18 @@ async def handle_websocket(websocket, path=None):
                         print(f"[WS] Unknown state: {state_str}")
 
                 elif msg_type == 'worn_status':
-                    # Update worn status for LED 2 control
                     is_worn = data.get('isWorn', False)
                     led.set_worn(is_worn)
 
                 elif msg_type == 'bela_status':
-                    # Bela/MIDI connection status
                     connected = data.get('connected', False)
                     led.set_bela_connected(connected)
 
                 elif msg_type == 'alpha_score':
-                    # Alpha state score (0-1 range)
                     score = data.get('score', 0.0)
                     led.set_alpha_score(score)
 
                 elif msg_type == 'midi_status':
-                    # Legacy support - treat as bela_status
                     midi_active = data.get('active', False)
                     led.set_bela_connected(midi_active)
 
@@ -247,21 +441,26 @@ async def handle_websocket(websocket, path=None):
 
     except websockets.exceptions.ConnectionClosed:
         print(f"[WS] Client disconnected: {client_addr}")
+    finally:
+        led.ws_clients.discard(websocket)
 
 
 async def main():
     """Main entry point"""
-    print("[LED Status Controller] Starting...")
+    print("[LED + Encoder Controller] Starting...")
     print(f"[LED] Configuration: {LED_COUNT} LEDs on GPIO10 (SPI)")
-    print(f"[LED] Alpha threshold: {ALPHA_THRESHOLD}")
+    print(f"[ENC] Encoders: {'available' if led.encoders else 'not available (simulation mode)'}")
+    print(f"[ENC] Values: {led.encoder_values}")
     print(f"[WS] WebSocket server listening on ws://localhost:8765")
+
+    # Store event loop reference for encoder broadcast thread
+    led._loop = asyncio.get_event_loop()
 
     # Set initial state
     led.set_muse_state(ConnectionState.IDLE)
 
     # Start WebSocket server
     async with websockets.serve(handle_websocket, "localhost", 8765):
-        # Run forever
         await asyncio.Future()
 
 

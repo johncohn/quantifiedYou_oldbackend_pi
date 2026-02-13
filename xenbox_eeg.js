@@ -158,7 +158,7 @@ const MIDI_CONFIG = {
   fixedValues: {
     rate: 24,              // 1.5 Hz: (1.5 / 8) * 127 ≈ 24
     depth: 64,             // 0.5: 0.5 * 127 ≈ 64
-    feedback: 0,           // Tone.js chorus has no feedback
+    feedback: 64,          // 0.4 after PD ×0.8 scaling — adds richness
     gain: 100,             // ~0.8 default gain
     sweep: 0               // Turn OFF auto-sweep (xenbox controls params)
   },
@@ -174,6 +174,7 @@ let lastMidiSendTime = 0;
 let _lastLoggedMix = -1;  // Track last logged mix value to reduce console spam
 let hasEEGData = false;    // True when Muse is sending data
 let midiStatusText = "MIDI: Not initialized";
+let encoderSensitivity = 8.0;  // EEG threshold sensitivity, controlled by encoder knob 3
 
 // WebSocket for LED status reporting
 let ledSocket = null;
@@ -187,6 +188,35 @@ function connectLEDSocket() {
       console.log('[LED WS] Connected to LED controller');
       // Send current Bela status on connect
       sendBelaStatus(midiEnabled);
+    };
+    ledSocket.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        if (data.type === 'encoder_values') {
+          // Update gain (CC5) and depth (CC2) from encoder knobs
+          const newGain = Math.max(0, Math.min(127, Math.round(data.gain)));
+          const newDepth = Math.max(0, Math.min(127, Math.round(data.depth)));
+          const newThreshold = Math.max(0, Math.min(127, Math.round(data.threshold)));
+
+          if (newGain !== MIDI_CONFIG.fixedValues.gain) {
+            MIDI_CONFIG.fixedValues.gain = newGain;
+            sendMIDICC(MIDI_CONFIG.cc.gain, newGain);
+            console.log(`[ENC] Gain -> ${newGain}`);
+          }
+          if (newDepth !== MIDI_CONFIG.fixedValues.depth) {
+            MIDI_CONFIG.fixedValues.depth = newDepth;
+            sendMIDICC(MIDI_CONFIG.cc.depth, newDepth);
+            console.log(`[ENC] Depth -> ${newDepth}`);
+          }
+          if (newThreshold !== Math.round((encoderSensitivity - 1.0) / 15.0 * 127)) {
+            // Map 0-127 to sensitivity 1.0-16.0
+            encoderSensitivity = 1.0 + (newThreshold / 127) * 15.0;
+            console.log(`[ENC] Threshold -> ${newThreshold} (sensitivity: ${encoderSensitivity.toFixed(1)})`);
+          }
+        }
+      } catch (e) {
+        // Ignore parse errors on incoming messages
+      }
     };
     ledSocket.onclose = () => {
       console.log('[LED WS] Disconnected, reconnecting in 2s...');
@@ -614,7 +644,7 @@ function draw() {
   // - Sigmoid provides smooth S-curve (no clicks)
   // - Sensitivity controls how much alpha change is needed for full swing
   const alphaDeviation = alpha_rel - alphaMean;  // How far from personal baseline
-  const sensitivity = 8.0;  // Higher = more sensitive to small changes
+  const sensitivity = encoderSensitivity;  // Controlled by encoder knob 3 (default 8.0)
   const smoothness = 6.0;   // Sigmoid steepness (lower = smoother transition)
   // Sigmoid centered at 0, so positive deviation -> high output, negative -> low
   const chorus_wetVal = 1 / (1 + Math.exp(-smoothness * alphaDeviation * sensitivity));
@@ -641,7 +671,21 @@ function draw() {
     }
   }
 
-  // Consolidated status panel (top-left, above histogram)
+  // Console logging - log every 30 seconds (reduced to minimize noise)
+  if (frameCount % 1800 === 0) {
+    console.log(`[XENBOX] Alpha:${nf(alpha_rel,1,3)} Chorus:${nf(chorus_wetVal,1,2)} HR:${heartRate} Worn:${isWorn?'YES':'NO'} MIDI:${midiEnabled&&isWorn?'ON':'SUPPRESSED'}`);
+  }
+
+  // Draw signal plots (first, so overlays render on top)
+  drawSignalPlots();
+
+  // Draw MIDI parameter histogram
+  drawMIDIHistogram();
+
+  // Draw PPG waveform for debugging
+  drawPPGWaveform();
+
+  // Consolidated status panel (drawn AFTER plots so it renders on top)
   push();
   const panelX = 280;
   const panelY = 5;
@@ -695,19 +739,30 @@ function draw() {
 
   pop();
 
-  // Console logging - log every 30 seconds (reduced to minimize noise)
-  if (frameCount % 1800 === 0) {
-    console.log(`[XENBOX] Alpha:${nf(alpha_rel,1,3)} Chorus:${nf(chorus_wetVal,1,2)} HR:${heartRate} Worn:${isWorn?'YES':'NO'} MIDI:${midiEnabled&&isWorn?'ON':'SUPPRESSED'}`);
-  }
+  // Encoder values - large separate display below status panel
+  push();
+  const encX = panelX;
+  const encY = panelY + panelH + 10;
+  const encW = 300;
+  const encH = 80;
 
-  // Draw signal plots
-  drawSignalPlots();
+  // Background
+  fill(30, 30, 30, 220);
+  noStroke();
+  rect(encX, encY, encW, encH, 8);
 
-  // Draw MIDI parameter histogram
-  drawMIDIHistogram();
+  // Encoder label
+  fill(255, 220, 0);
+  textSize(24);
+  textAlign(LEFT, TOP);
+  text('ENCODERS', encX + 10, encY + 5);
 
-  // Draw PPG waveform for debugging
-  drawPPGWaveform();
+  // Values
+  textSize(20);
+  fill(255);
+  text(`GAIN:${MIDI_CONFIG.fixedValues.gain}  DEPTH:${MIDI_CONFIG.fixedValues.depth}  THR:${Math.round((encoderSensitivity - 1.0) / 15.0 * 127)}`, encX + 10, encY + 40);
+
+  pop();
 
   // Apply effect modulations
   // MIDI is suppressed when: no EEG data (Muse not connected) or headset not worn

@@ -88,6 +88,7 @@ while true; do
         --disable-features=TranslateUI \
         --no-first-run \
         --start-fullscreen \
+        --remote-debugging-port=9222 \
         --window-size=1920,1080 \
         --window-position=0,0 \
         "$KIOSK_URL" \
