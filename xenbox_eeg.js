@@ -184,6 +184,8 @@ let liveInput = false;             // false = tone generator, true = live audio 
 let rawAlphaMidi = 0;              // Raw alpha activity 0-127 (pre-threshold, for histogram display)
 const sessionId = Date.now().toString(36) + Math.random().toString(36).substr(2, 5);  // Unique per page load
 let smoothedAlpha = 64;            // EMA-smoothed raw alpha (0-127), ~4 second time constant
+let noDataFrames = 0;              // Counter for consecutive zero-data frames (for disconnect detection)
+let effectActive = false;          // True when EEG data flowing AND headset is worn
 
 // WebSocket for LED status reporting
 let ledSocket = null;
@@ -643,7 +645,21 @@ function draw() {
 
   // Weighted aggregate = sum of all parameter values (slider-scaled data)
   const weighted = alpha + lowBeta + highBeta + theta + gamma;
-  hasEEGData = weighted > 0;  // Track if Muse is actually sending data
+
+  // Track EEG data presence with hysteresis — require 60 consecutive zero frames (~1s)
+  // before declaring data lost. Prevents false resets during brief reconnection gaps.
+  if (weighted > 0) {
+    noDataFrames = 0;
+    hasEEGData = true;
+  } else {
+    noDataFrames++;
+    if (noDataFrames > 60 && hasEEGData) {
+      hasEEGData = false;
+      smoothedAlpha = 0;
+      rawAlphaMidi = 0;
+      sendAlphaScore(0);
+    }
+  }
 
   // Calculate sum for normalization (for relative values used in effects)
   const sum = weighted; // same as the sum of all components
@@ -692,9 +708,12 @@ function draw() {
     ? Math.min(1, (smoothedAlpha - thresholdMidi) / (127 - thresholdMidi))
     : 0;
 
+  // Master gate: effect is only active when EEG data flowing AND headset is worn
+  effectActive = hasEEGData && isWorn;
+
   // Send effect mix value to LED controller (~20Hz)
   if (frameCount % 3 === 0) {
-    sendAlphaScore(chorus_wetVal);
+    sendAlphaScore(effectActive ? chorus_wetVal : 0);
   }
 
   // Other effects use sigmoid
@@ -821,11 +840,9 @@ function draw() {
   pop();
 
   // Apply effect modulations based on active effect
-  // MIDI is suppressed when: no EEG data (Muse not connected) or headset not worn
-  // Use sendMIDICC (not throttled) for both to avoid single-timestamp throttle
-  // blocking the zero-out of the inactive effect
-  if (midiEnabled && hasEEGData) {
-    const wetValue = isWorn ? chorus_wetVal * 127 : 0;
+  // effectActive = hasEEGData && isWorn — zero when Muse disconnected OR headset off
+  if (midiEnabled) {
+    const wetValue = effectActive ? chorus_wetVal * 127 : 0;
 
     if (activeEffect === 'Chorus') {
       sendMIDICCThrottled(MIDI_CONFIG.cc.mix, wetValue);
@@ -1000,19 +1017,21 @@ function drawMIDIHistogram() {
 
   // ========== EEG SECTION ==========
   push();
-  fill(0);
+  fill(effectActive ? 0 : 150);
   textSize(11);
   textAlign(CENTER, TOP);
-  text("EEG Bands (Relative)", histX + histWidth / 2, histY + 5);
+  text(effectActive ? "EEG Bands (Relative)" : "EEG Bands (no data)", histX + histWidth / 2, histY + 5);
   pop();
 
   // EEG parameters (0-1 scale, shown as percentage)
+  // Grey out colors when no EEG data
+  const grey = [180, 180, 180];
   const eegParams = [
-    { name: "Alpha", value: eegDisplayValues.alpha, color: [255, 100, 100] },
-    { name: "Theta", value: eegDisplayValues.theta, color: [255, 200, 100] },
-    { name: "Low Beta", value: eegDisplayValues.lowBeta, color: [100, 255, 100] },
-    { name: "High Beta", value: eegDisplayValues.highBeta, color: [100, 100, 255] },
-    { name: "Gamma", value: eegDisplayValues.gamma, color: [200, 100, 255] }
+    { name: "Alpha", value: eegDisplayValues.alpha, color: effectActive ? [255, 100, 100] : grey },
+    { name: "Theta", value: eegDisplayValues.theta, color: effectActive ? [255, 200, 100] : grey },
+    { name: "Low Beta", value: eegDisplayValues.lowBeta, color: effectActive ? [100, 255, 100] : grey },
+    { name: "High Beta", value: eegDisplayValues.highBeta, color: effectActive ? [100, 100, 255] : grey },
+    { name: "Gamma", value: eegDisplayValues.gamma, color: effectActive ? [200, 100, 255] : grey }
   ];
 
   const barMaxWidth = histWidth - 70;
@@ -1056,19 +1075,20 @@ function drawMIDIHistogram() {
   // ========== MIDI SECTION ==========
   y += 8;
   push();
-  fill(0);
+  fill(effectActive ? 0 : 150);
   textSize(11);
   textAlign(CENTER, TOP);
-  text("MIDI to Bela", histX + histWidth / 2, y);
+  text(effectActive ? "MIDI to Bela" : "MIDI to Bela (inactive)", histX + histWidth / 2, y);
   pop();
   y += 16;
 
   // MIDI parameters (0-127 scale)
   // Mix bar shows RAW alpha activity (pre-threshold), not the gated value
+  // When no EEG data, show greyed out bars
   const knob2Name = activeEffect === 'Chorus' ? "Depth" : "Drive";
   const knob2Val = activeEffect === 'Chorus' ? midiValues.depth : midiValues.satDrive;
   const midiParams = [
-    { name: "Mix", value: Math.round(smoothedAlpha), color: [76, 175, 80], dynamic: true },
+    { name: "Mix", value: effectActive ? Math.round(smoothedAlpha) : 0, color: effectActive ? [76, 175, 80] : [180, 180, 180], dynamic: true },
     { name: knob2Name, value: knob2Val, color: [100, 100, 100], dynamic: false },
     { name: "Gain", value: midiValues.gain, color: [100, 100, 100], dynamic: false }
   ];
@@ -1076,7 +1096,7 @@ function drawMIDIHistogram() {
   for (let param of midiParams) {
     // Label
     push();
-    fill(0);
+    fill(effectActive ? 0 : 150);
     textSize(9);
     textAlign(LEFT, CENTER);
     text(param.name, histX + 5, y + barHeight / 2);
@@ -1101,7 +1121,7 @@ function drawMIDIHistogram() {
     if (param.dynamic) {
       const thrX = histX + 55 + (encoderThreshold / 127) * barMaxWidth;
       push();
-      stroke(255, 100, 0);
+      stroke(effectActive ? color(255, 100, 0) : color(200, 180, 160));
       strokeWeight(2);
       line(thrX, y, thrX, y + barHeight);
       pop();
@@ -1109,7 +1129,7 @@ function drawMIDIHistogram() {
 
     // Value text
     push();
-    fill(0);
+    fill(effectActive ? 0 : 150);
     textSize(9);
     textAlign(RIGHT, CENTER);
     text(param.value, histX + histWidth - 5, y + barHeight / 2);

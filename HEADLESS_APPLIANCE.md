@@ -130,14 +130,20 @@ xenbox_eeg.js (p5.js iframe)                                 │
     │            / (127 - threshold)                          │
     │    else: wet = 0                                        │
     │                                                        │
+    ├─── SAFETY GATE: effectActive = hasEEGData && isWorn     │
+    │    All output is ZERO unless Muse streaming + on head   │
+    │                                                        │
     ├─── Active effect gets wet value as MIDI CC ──► Bela    │
     │    Chorus:     CC4 = wet * 127                          │
     │    Saturation: CC7 = wet * 127                          │
+    │    (sends 0 when !effectActive)                         │
     │                                                        │
     └─── wet value (0-1) ──► WebSocket :8765 ──────────────► │
+         (sends 0 when !effectActive)                         │
                                                               │
                                                          LED 2 (AQUA)
                                                          brightness = wet * 64
+                                                         (off unless streaming+worn)
                                                               │
                                                          LED 0 (GREEN/RED)
                                                          GREEN = ready
@@ -203,6 +209,20 @@ When switching effects:
 - Inactive effect gets `0` on its mix CC
 - Encoder knob 2 remaps to the active effect's parameter
 
+### Safety Gating
+
+All audio output and LED activity require `effectActive = hasEEGData && isWorn`:
+
+| Condition | MIDI to Bela | LED 2 | Dashboard Histogram |
+|-----------|-------------|-------|---------------------|
+| Muse streaming + worn | wet * 127 | AQUA (proportional) | Active (colored) |
+| Muse streaming, not worn | 0 | OFF | Greyed out |
+| Muse disconnected | 0 | OFF | Greyed out |
+
+This is enforced in two places:
+- **Browser** (`xenbox_eeg.js`): `effectActive` gates MIDI CC sends and LED WebSocket messages
+- **LED controller** (`led_status_controller.py`): LED 2 only renders when `muse_state == STREAMING and is_worn`
+
 ---
 
 ## Hardware: LEDs and Encoders
@@ -215,7 +235,7 @@ When switching effects:
 | 0 | **RED** (solid) | Bypass mode (GPIO17 grounded) |
 | 1 | **PURPLE** (pulse) | Muse connected + worn (5s sine pulse, gamma-corrected) |
 | 1 | **PURPLE** (solid) | Muse connected, not worn |
-| 2 | **AQUA** (variable) | Effect mix level (brightness = wet value) |
+| 2 | **AQUA** (variable) | Effect mix level (only when streaming + worn, off otherwise) |
 
 ### Bypass Switch (GPIO17)
 

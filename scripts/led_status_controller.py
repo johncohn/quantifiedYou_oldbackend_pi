@@ -228,9 +228,14 @@ class LEDController:
         with self.lock:
             if self.muse_state != state:
                 print(f"[LED] Muse state: {self.muse_state.value} -> {state.value}")
+                old_state = self.muse_state
                 self.muse_state = state
                 if state == ConnectionState.STREAMING:
                     self.is_worn = True
+                # Reset wet value when leaving streaming (Muse disconnected)
+                if old_state == ConnectionState.STREAMING and state != ConnectionState.STREAMING:
+                    self.wet_value = 0.0
+                    print("[LED] Reset wet_value to 0 (Muse no longer streaming)")
 
     def set_wet_value(self, wet: float):
         """Set effect mix value (0-1) for blue LED — same value driving the audio."""
@@ -253,6 +258,10 @@ class LEDController:
             if self.is_worn != is_worn:
                 print(f"[LED] Worn: {self.is_worn} -> {is_worn}")
                 self.is_worn = is_worn
+                # Immediately kill LED 2 when headset removed
+                if not is_worn:
+                    self.wet_value = 0.0
+                    print("[LED] Reset wet_value to 0 (headset removed)")
 
     def _poll_encoders(self):
         """Poll encoder positions and buttons, return True if values changed.
@@ -402,10 +411,11 @@ class LEDController:
                 elif muse_state in (ConnectionState.STREAMING, ConnectionState.CONNECTED):
                     led1_r, led1_g, led1_b = BRIGHTNESS, 0, BRIGHTNESS  # PURPLE solid
 
-                # LED 2: AQUA — effect mix level
+                # LED 2: AQUA — effect mix level (only when streaming + worn)
                 led2_r, led2_g, led2_b = 0, 0, 0
-                mix_br = int(wet_value * BRIGHTNESS)
-                led2_r, led2_g, led2_b = 0, mix_br, int(mix_br * 0.8)  # AQUA (green + blue)
+                if muse_state == ConnectionState.STREAMING and is_worn:
+                    mix_br = int(wet_value * BRIGHTNESS)
+                    led2_r, led2_g, led2_b = 0, mix_br, int(mix_br * 0.8)  # AQUA (green + blue)
 
                 if self.neo:
                     self.neo.set_led_color(0, led0_r, led0_g, led0_b)
