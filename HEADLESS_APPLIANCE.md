@@ -16,72 +16,92 @@ This document describes the complete architecture for running YouQuantified as a
 └──────┬───────┘
        │ Bluetooth LE
        ▼
-┌──────────────────────────────────────────────────────────────────┐
-│                      Raspberry Pi 5                              │
-│                                                                  │
-│  ┌──────────────────────────────────────────────────────────┐   │
-│  │              Chromium (Kiosk Mode, port :3000)            │   │
-│  │                                                          │   │
-│  │  ┌─────────────────────┐   ┌──────────────────────────┐ │   │
-│  │  │    kiosk-muse.js    │   │    xenbox_eeg.js          │ │   │
-│  │  │    (parent page)    │   │    (srcdoc iframe)        │ │   │
-│  │  │                     │   │                          │ │   │
-│  │  │  - Bluetooth to Muse│   │  - EEG visualization     │ │   │
-│  │  │  - Band power calc  │   │  - Alpha smoothing (EMA) │ │   │
-│  │  │  - PPG worn detect  │   │  - Threshold gating      │ │   │
-│  │  │  - Redux dispatch   │   │  - Effect switching UI   │ │   │
-│  │  │                     │   │  - Histogram display     │ │   │
-│  │  │     WebSocket ──────┼───┼──► muse_status, worn     │ │   │
-│  │  │     to LED ctrl     │   │                          │ │   │
-│  │  └─────────────────────┘   │     USB-MIDI ────────────┼─┼───┼──► Bela
-│  │                            │     CC1-9 to PD patch    │ │   │
-│  │                            │                          │ │   │
-│  │                            │     WebSocket ───────────┼─┼───┼──► LED Controller
-│  │                            │     wet value (0-1)      │ │   │
-│  │                            │     + encoder values in  │ │   │
-│  │                            └──────────────────────────┘ │   │
-│  └──────────────────────────────────────────────────────────┘   │
-│                                                                  │
-│  ┌──────────────────────────────────────────────────────────┐   │
-│  │         led_status_controller.py (systemd service)        │   │
-│  │         WebSocket server on ws://localhost:8765            │   │
-│  │                                                          │   │
-│  │  Receives:                    Hardware:                   │   │
-│  │  - muse_status (from parent)  - 3x WS2812B NeoPixels    │   │
-│  │  - worn_status (from parent)    (SPI on GPIO10)          │   │
-│  │  - wet value   (from iframe)  - 3x Rotary Encoders      │   │
-│  │                                 (I2C seesaw 0x49)        │   │
-│  │  Sends:                                                  │   │
-│  │  - encoder_values (gain,       LED 0: RED  = system on   │   │
-│  │    depth, threshold)           LED 1: GREEN = Muse pulse │   │
-│  │                                LED 2: BLUE  = effect mix │   │
-│  └──────────────────────────────────────────────────────────┘   │
-│                                                                  │
-│  ┌──────────────┐   ┌──────────────────┐                       │
-│  │ serve -s build│   │ Keystone (port   │                       │
-│  │ (port :3000)  │   │ :3001) serves    │                       │
-│  │ React frontend│   │ blob/API         │                       │
-│  └──────────────┘   └──────────────────┘                       │
-└──────────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────┐
+│                      RASPBERRY PI 5                          │
+│                                                              │
+│  ┌───────────────────────────────────────────────────────┐  │
+│  │           Chromium (Kiosk Mode, port :3000)            │  │
+│  │                                                        │  │
+│  │  ┌───────────────────┐   ┌──────────────────────────┐ │  │
+│  │  │   kiosk-muse.js   │   │      xenbox_eeg.js       │ │  │
+│  │  │   (parent page)   │   │      (srcdoc iframe)     │ │  │
+│  │  │                   │   │                          │ │  │
+│  │  │ - Bluetooth→Muse  │   │ - EEG visualization     │ │  │
+│  │  │ - Band power calc │   │ - Alpha smoothing (EMA)  │ │  │
+│  │  │ - PPG worn detect │   │ - Threshold gating       │ │  │
+│  │  │ - Redux dispatch  │   │ - Effect switching UI    │ │  │
+│  │  │                   │   │ - Histogram display      │ │  │
+│  │  │   WS :8765 ───────┼───┼──► muse_status, worn    │ │  │
+│  │  │                   │   │                          │ │  │
+│  │  └───────────────────┘   │   USB-MIDI ──────────────┼─┼──┼──► Bela
+│  │                          │   CC1-9 to PD patch      │ │  │
+│  │                          │                          │ │  │
+│  │                          │   WS :8765 ──────────────┼─┼──┼──► LED ctrl
+│  │                          │   wet (0-1) out          │ │  │
+│  │                          │   encoder values in      │ │  │
+│  │                          └──────────────────────────┘ │  │
+│  └───────────────────────────────────────────────────────┘  │
+│                                                              │
+│  ┌───────────────────────────────────────────┐              │
+│  │  led_status_controller.py (systemd svc)   │              │
+│  │  WebSocket server ws://localhost:8765      │              │
+│  │                                           │              │
+│  │  Receives from browser:                   │              │
+│  │    muse_status, worn_status, wet value    │              │
+│  │  Sends to browser:                        │              │
+│  │    encoder_values (gain, depth, threshold)│              │
+│  └──────────────┬────────────────────────────┘              │
+│                 │                                            │
+│                 │  GPIO10 (SPI)         ┌──────────────────────────────────────┐
+│                 ├──────────────────────►│  WS2812B NEOPIXELS (x3)             │
+│                 │                       │                                      │
+│                 │                       │  LED 0 ── GREEN: ready, RED: bypass  │
+│                 │                       │  LED 1 ── PURPLE: Muse status        │
+│                 │                       │           (pulses when streaming+worn)│
+│                 │                       │  LED 2 ── AQUA: effect mix level     │
+│                 │                       └──────────────────────────────────────┘
+│                 │
+│                 │  I2C (addr 0x49)      ┌──────────────────────────────────────┐
+│                 ├──────────────────────►│  ROTARY ENCODERS (x3, seesaw)       │
+│                 │                       │                                      │
+│                 │                       │  Knob 1 ── Master Gain (CC5)         │
+│                 │                       │  Knob 2 ── Depth/Drive (CC2/CC8)     │
+│                 │                       │  Knob 3 ── EEG Threshold (local)     │
+│                 │                       │  Button ── Save settings to disk     │
+│                 │                       └──────────────────────────────────────┘
+│                 │
+│                 │  GPIO17 (input, pull-up)
+│                 └──────────────────────┐
+│                                        │
+│  ┌────────────┐  ┌────────────────┐   ┌──────────────────────────────────────┐
+│  │serve -s    │  │ Keystone       │   │  BYPASS SWITCH                       │
+│  │build :3000 │  │ :3001 blob/API │   │                                      │
+│  │React app   │  │                │   │  GPIO17 ─── switch ─── GND           │
+│  └────────────┘  └────────────────┘   │  Open = normal (GREEN LED 0)         │
+│                                        │  Closed = bypass (RED LED 0)         │
+└────────────────────────────────────────└──────────────────────────────────────┘
        │ USB-MIDI
        ▼
-┌──────────────────────────────────────────────────────────────────┐
-│                         Bela GEM                                 │
-│                                                                  │
-│  _main.pd (Pure Data)                                           │
-│  ┌──────────────────────────────────────────────────────────┐   │
-│  │  MIDI IN ──► CC1-6: Chorus params                        │   │
-│  │              CC7-8: Saturation params                     │   │
-│  │              CC9:   Input source toggle                   │   │
-│  │                                                          │   │
-│  │  Audio: tone gen ─┐                                      │   │
-│  │         adc~ ─────┼──► chorus-stereo~ ──► saturator~ ──► dac~ │
-│  │                   crossfade (CC9)                         │   │
-│  └──────────────────────────────────────────────────────────┘   │
-│                                                                  │
-│  Audio In  ◄── Guitar/Instrument                                │
-│  Audio Out ──► Amp/Speakers                                     │
-└──────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────┐
+│            BELA GEM                   │
+│                                       │
+│  _main.pd (Pure Data)                │
+│  ┌─────────────────────────────────┐ │
+│  │ MIDI IN:                        │ │
+│  │   CC1-6  Chorus params          │ │
+│  │   CC7-8  Saturation params      │ │
+│  │   CC9    Input source toggle    │ │
+│  │                                 │ │
+│  │ Audio:                          │ │
+│  │   tone gen ─┐                   │ │
+│  │   adc~ ─────┼──► chorus-stereo~ │ │
+│  │       crossfade  ──► saturator~ │ │
+│  │         (CC9)       ──► dac~    │ │
+│  └─────────────────────────────────┘ │
+│                                       │
+│  Audio In  ◄── Guitar/Instrument     │
+│  Audio Out ──► Amp/Speakers          │
+└──────────────────────────────────────┘
 ```
 
 ---
@@ -116,8 +136,13 @@ xenbox_eeg.js (p5.js iframe)                                 │
     │                                                        │
     └─── wet value (0-1) ──► WebSocket :8765 ──────────────► │
                                                               │
-                                                         LED 2 (BLUE)
+                                                         LED 2 (AQUA)
                                                          brightness = wet * 64
+                                                              │
+                                                         LED 0 (GREEN/RED)
+                                                         GREEN = ready
+                                                         RED = bypass
+                                                         (GPIO17 to GND)
 ```
 
 ---
@@ -186,10 +211,15 @@ When switching effects:
 
 | LED | Color | Meaning |
 |-----|-------|---------|
-| 0 | RED (solid) | System running |
-| 1 | GREEN (pulse) | Muse connected + worn (5s sine pulse, gamma-corrected) |
-| 1 | GREEN (solid) | Muse connected, not worn |
-| 2 | BLUE (variable) | Effect mix level (brightness = wet value) |
+| 0 | **GREEN** (solid) | System ready, running normally |
+| 0 | **RED** (solid) | Bypass mode (GPIO17 grounded) |
+| 1 | **PURPLE** (pulse) | Muse connected + worn (5s sine pulse, gamma-corrected) |
+| 1 | **PURPLE** (solid) | Muse connected, not worn |
+| 2 | **AQUA** (variable) | Effect mix level (brightness = wet value) |
+
+### Bypass Switch (GPIO17)
+
+A physical bypass switch connects **GPIO17** to **GND**. The LED controller configures GPIO17 as input with pull-up resistor. When grounded, LED 0 switches from GREEN to RED to indicate bypass mode.
 
 ### Rotary Encoders (Adafruit Quad Breakout, I2C 0x49)
 

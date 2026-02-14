@@ -8,9 +8,9 @@ Uses Pi5Neo library for Raspberry Pi 5 compatibility.
 Communicates bidirectionally with the browser via WebSocket.
 
 LED Layout:
-- LED 0: RED always (system running)
-- LED 1: GREEN when Muse connected/streaming
-- LED 2: BLUE proportional to alpha score (when streaming + worn)
+- LED 0: GREEN when system ready, RED when bypass (GPIO17 grounded)
+- LED 1: PURPLE when Muse connected, PURPLE pulse when streaming + worn
+- LED 2: AQUA proportional to effect mix (when streaming + worn)
 
 Encoder Layout (Adafruit Quad Encoder Breakout, I2C addr 0x49):
 - Encoder 0: Chorus gain (CC5, 0-127, default 100)
@@ -42,6 +42,14 @@ try:
     print("[LED] Configured GPIO10 for SPI mode")
 except Exception as e:
     print(f"[LED] Warning: Could not configure GPIO10: {e}")
+
+# Configure GPIO 17 as input with pull-up for bypass detection (grounded = bypass)
+BYPASS_GPIO = 17
+try:
+    subprocess.run(['pinctrl', 'set', str(BYPASS_GPIO), 'ip', 'pu'], check=True, capture_output=True)
+    print(f"[LED] Configured GPIO{BYPASS_GPIO} as input with pull-up (bypass detect)")
+except Exception as e:
+    print(f"[LED] Warning: Could not configure GPIO{BYPASS_GPIO}: {e}")
 
 try:
     from pi5neo import Pi5Neo
@@ -228,6 +236,18 @@ class LEDController:
         """Set effect mix value (0-1) for blue LED — same value driving the audio."""
         self.wet_value = max(0.0, min(1.0, wet))
 
+    def _read_bypass_gpio(self):
+        """Read bypass GPIO — returns True if grounded (bypass active)."""
+        try:
+            result = subprocess.run(
+                ['pinctrl', 'get', str(BYPASS_GPIO)],
+                capture_output=True, text=True, timeout=0.1
+            )
+            # Output like: "17: ip -- pu | lo // GPIO17 = input"
+            return 'lo' in result.stdout
+        except Exception:
+            return False
+
     def set_worn(self, is_worn: bool):
         with self.lock:
             if self.is_worn != is_worn:
@@ -364,23 +384,28 @@ class LEDController:
                             self.flash_save = False
                             self.flash_counter = 0
 
-                # LED 0: Always RED when system is running
-                led0_r, led0_g, led0_b = BRIGHTNESS, 0, 0
+                # LED 0: GREEN = system ready, RED = bypass (GPIO grounded)
+                bypass = self._read_bypass_gpio()
+                if bypass:
+                    led0_r, led0_g, led0_b = BRIGHTNESS, 0, 0        # RED = bypass
+                else:
+                    led0_r, led0_g, led0_b = 0, BRIGHTNESS, 0        # GREEN = ready
 
-                # LED 1: GREEN when Muse connected
-                # Smooth slow pulse when streaming AND worn (5-second cycle, dips near off)
+                # LED 1: PURPLE when Muse connected
+                # Purple pulse when streaming AND worn (5-second cycle)
                 led1_r, led1_g, led1_b = 0, 0, 0
                 if muse_state == ConnectionState.STREAMING and is_worn:
                     pulse = (math.sin(time.time() * 2 * math.pi / 5.0) + 1) / 2  # 0-1 over 5s
-                    # Gamma correction (2.2) for perceptually smooth brightness
                     gamma_pulse = pulse ** 2.2
-                    led1_g = int(1 + gamma_pulse * (BRIGHTNESS - 1))  # Pulse between near-off and bright
+                    br = int(1 + gamma_pulse * (BRIGHTNESS - 1))
+                    led1_r, led1_g, led1_b = br, 0, br               # PURPLE pulse
                 elif muse_state in (ConnectionState.STREAMING, ConnectionState.CONNECTED):
-                    led1_g = BRIGHTNESS
+                    led1_r, led1_g, led1_b = BRIGHTNESS, 0, BRIGHTNESS  # PURPLE solid
 
-                # LED 2: BLUE — directly maps the effect wet value (0-1) to brightness
+                # LED 2: AQUA — effect mix level
                 led2_r, led2_g, led2_b = 0, 0, 0
-                led2_b = int(wet_value * BRIGHTNESS)
+                mix_br = int(wet_value * BRIGHTNESS)
+                led2_r, led2_g, led2_b = 0, mix_br, int(mix_br * 0.8)  # AQUA (green + blue)
 
                 if self.neo:
                     self.neo.set_led_color(0, led0_r, led0_g, led0_b)
@@ -391,7 +416,7 @@ class LEDController:
                         self._led2_log = 0
                     self._led2_log += 1
                     if self._led2_log % 300 == 0:
-                        print(f"[LED2] b={led2_b} wet={wet_value:.3f}")
+                        print(f"[LED2] r={led2_r} b={led2_b} wet={wet_value:.3f} bypass={bypass}")
 
             except Exception as e:
                 print(f"[LED] Animation error: {e}")
