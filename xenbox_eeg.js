@@ -148,9 +148,12 @@ const MIDI_CONFIG = {
     rate: 1,               // CC1: LFO rate (0.1-8 Hz)
     depth: 2,              // CC2: Modulation depth (0-1)
     feedback: 3,           // CC3: Feedback (0-0.8)
-    mix: 4,                // CC4: Wet/dry mix (0-1) - controlled by Alpha
+    mix: 4,                // CC4: Chorus wet/dry mix (0-1) - controlled by Alpha
     gain: 5,               // CC5: Master gain (0-1)
-    sweep: 6               // CC6: Auto-sweep toggle (0=off, 127=on)
+    sweep: 6,              // CC6: Auto-sweep toggle (0=off, 127=on)
+    satMix: 7,             // CC7: Saturation wet/dry mix (0-1) - controlled by Alpha
+    satDrive: 8,           // CC8: Saturation drive amount (maps to 1-10 in PD)
+    inputSelect: 9         // CC9: Input source (0=tone generator, 127=live audio input)
   },
 
   // Fixed values to match Tone.js chorus settings
@@ -160,7 +163,8 @@ const MIDI_CONFIG = {
     depth: 64,             // 0.5: 0.5 * 127 ≈ 64
     feedback: 64,          // 0.4 after PD ×0.8 scaling — adds richness
     gain: 100,             // ~0.8 default gain
-    sweep: 0               // Turn OFF auto-sweep (xenbox controls params)
+    sweep: 0,              // Turn OFF auto-sweep (xenbox controls params)
+    satDrive: 28           // Drive ~3 (maps to (28/127)*9+1 ≈ 3 in PD)
   },
 
   // Rate limiting for CC messages (ms between sends)
@@ -174,7 +178,12 @@ let lastMidiSendTime = 0;
 let _lastLoggedMix = -1;  // Track last logged mix value to reduce console spam
 let hasEEGData = false;    // True when Muse is sending data
 let midiStatusText = "MIDI: Not initialized";
-let encoderSensitivity = 8.0;  // EEG threshold sensitivity, controlled by encoder knob 3
+let encoderThreshold = 64;     // Knob 3 raw value (0-127): threshold offset for effect activation
+let activeEffect = 'Saturation';  // Default effect at power-up ('Chorus' or 'Saturation')
+let liveInput = false;             // false = tone generator, true = live audio input
+let rawAlphaMidi = 0;              // Raw alpha activity 0-127 (pre-threshold, for histogram display)
+const sessionId = Date.now().toString(36) + Math.random().toString(36).substr(2, 5);  // Unique per page load
+let smoothedAlpha = 64;            // EMA-smoothed raw alpha (0-127), ~4 second time constant
 
 // WebSocket for LED status reporting
 let ledSocket = null;
@@ -191,27 +200,37 @@ function connectLEDSocket() {
     };
     ledSocket.onmessage = (event) => {
       try {
-        const data = JSON.parse(event.data);
-        if (data.type === 'encoder_values') {
-          // Update gain (CC5) and depth (CC2) from encoder knobs
-          const newGain = Math.max(0, Math.min(127, Math.round(data.gain)));
-          const newDepth = Math.max(0, Math.min(127, Math.round(data.depth)));
-          const newThreshold = Math.max(0, Math.min(127, Math.round(data.threshold)));
-
+        const msg = JSON.parse(event.data);
+        if (msg.type === 'encoder_values') {
+          // Knob 1: Gain (CC5) — always controls master gain
+          const newGain = Math.max(0, Math.min(127, Math.round(msg.gain)));
           if (newGain !== MIDI_CONFIG.fixedValues.gain) {
             MIDI_CONFIG.fixedValues.gain = newGain;
             sendMIDICC(MIDI_CONFIG.cc.gain, newGain);
             console.log(`[ENC] Gain -> ${newGain}`);
           }
-          if (newDepth !== MIDI_CONFIG.fixedValues.depth) {
-            MIDI_CONFIG.fixedValues.depth = newDepth;
-            sendMIDICC(MIDI_CONFIG.cc.depth, newDepth);
-            console.log(`[ENC] Depth -> ${newDepth}`);
+
+          // Knob 2: Depth/Drive — depends on active effect
+          const newKnob2 = Math.max(0, Math.min(127, Math.round(msg.depth)));
+          if (activeEffect === 'Chorus') {
+            if (newKnob2 !== MIDI_CONFIG.fixedValues.depth) {
+              MIDI_CONFIG.fixedValues.depth = newKnob2;
+              sendMIDICC(MIDI_CONFIG.cc.depth, newKnob2);
+              console.log(`[ENC] Depth -> ${newKnob2}`);
+            }
+          } else {
+            if (newKnob2 !== MIDI_CONFIG.fixedValues.satDrive) {
+              MIDI_CONFIG.fixedValues.satDrive = newKnob2;
+              sendMIDICC(MIDI_CONFIG.cc.satDrive, newKnob2);
+              console.log(`[ENC] Drive -> ${newKnob2}`);
+            }
           }
-          if (newThreshold !== Math.round((encoderSensitivity - 1.0) / 15.0 * 127)) {
-            // Map 0-127 to sensitivity 1.0-16.0
-            encoderSensitivity = 1.0 + (newThreshold / 127) * 15.0;
-            console.log(`[ENC] Threshold -> ${newThreshold} (sensitivity: ${encoderSensitivity.toFixed(1)})`);
+
+          // Knob 3: Threshold — controls effect activation offset
+          const newThreshold = Math.max(0, Math.min(127, Math.round(msg.threshold)));
+          if (newThreshold !== encoderThreshold) {
+            encoderThreshold = newThreshold;
+            console.log(`[ENC] Threshold -> ${newThreshold}`);
           }
         }
       } catch (e) {
@@ -243,20 +262,14 @@ function sendBelaStatus(connected) {
   }
 }
 
-function sendAlphaScore(score) {
-  // Use postMessage to send through parent window (kiosk-muse.js has the LED WebSocket)
+function sendAlphaScore(wetVal) {
+  // Send the exact effect mix value (0-1) to LED controller for blue LED
   try {
-    const message = { type: 'alpha_score', score: score };
-    // Try parent window first (for iframe), then top, then current window
-    if (window.parent && window.parent !== window) {
-      window.parent.postMessage(message, '*');
-    } else if (window.top && window.top !== window) {
-      window.top.postMessage(message, '*');
-    } else {
-      window.postMessage(message, '*');
+    if (ledSocket?.readyState === WebSocket.OPEN) {
+      ledSocket.send(JSON.stringify({ type: 'alpha_score', wet: wetVal }));
     }
   } catch (e) {
-    console.log('[LED] postMessage failed:', e);
+    console.log('[LED] sendAlphaScore failed:', e);
   }
 }
 
@@ -267,7 +280,9 @@ let midiValues = {
   depth: 0,
   feedback: 0,
   gain: 0,
-  sweep: 0
+  sweep: 0,
+  satMix: 0,
+  satDrive: 0
 };
 
 // History for animated bars (smooth transitions)
@@ -406,14 +421,19 @@ function connectToMIDIOutput(output) {
   console.log(`[MIDI] Connected to: ${output.name}`);
   sendBelaStatus(true);  // Notify LED controller
 
-  // Send fixed Tone.js-matching values on connect
+  // Send fixed parameter values on connect
   setTimeout(() => {
     sendMIDICC(MIDI_CONFIG.cc.rate, MIDI_CONFIG.fixedValues.rate);
     sendMIDICC(MIDI_CONFIG.cc.depth, MIDI_CONFIG.fixedValues.depth);
     sendMIDICC(MIDI_CONFIG.cc.feedback, MIDI_CONFIG.fixedValues.feedback);
     sendMIDICC(MIDI_CONFIG.cc.gain, MIDI_CONFIG.fixedValues.gain);
     sendMIDICC(MIDI_CONFIG.cc.sweep, MIDI_CONFIG.fixedValues.sweep);
-    console.log("[MIDI] Sent fixed chorus parameters to Bela (sweep OFF)");
+    sendMIDICC(MIDI_CONFIG.cc.satDrive, MIDI_CONFIG.fixedValues.satDrive);
+    // Set initial mix based on default effect
+    sendMIDICC(MIDI_CONFIG.cc.mix, activeEffect === 'Chorus' ? 0 : 0);
+    sendMIDICC(MIDI_CONFIG.cc.satMix, 0);
+    sendMIDICC(MIDI_CONFIG.cc.inputSelect, liveInput ? 127 : 0);
+    console.log("[MIDI] Sent parameters to Bela (default effect: " + activeEffect + ")");
   }, 500);
 }
 
@@ -431,12 +451,10 @@ function sendMIDICC(cc, value) {
   // Track values for visualization
   if (cc === MIDI_CONFIG.cc.mix) {
     midiValues.mix = midiValue;
-    midiValueHistory.mix.push(midiValue);
-    if (midiValueHistory.mix.length > MIDI_HISTORY_LENGTH) {
-      midiValueHistory.mix.shift();
+    if (activeEffect === 'Chorus') {
+      midiValueHistory.mix.push(midiValue);
+      if (midiValueHistory.mix.length > MIDI_HISTORY_LENGTH) midiValueHistory.mix.shift();
     }
-    // Suppress CC mix logging during normal operation - too noisy
-    // Only state-change MIDI logs (connect/disconnect) will show
   } else if (cc === MIDI_CONFIG.cc.rate) {
     midiValues.rate = midiValue;
   } else if (cc === MIDI_CONFIG.cc.depth) {
@@ -447,6 +465,14 @@ function sendMIDICC(cc, value) {
     midiValues.gain = midiValue;
   } else if (cc === MIDI_CONFIG.cc.sweep) {
     midiValues.sweep = midiValue;
+  } else if (cc === MIDI_CONFIG.cc.satMix) {
+    midiValues.satMix = midiValue;
+    if (activeEffect === 'Saturation') {
+      midiValueHistory.mix.push(midiValue);
+      if (midiValueHistory.mix.length > MIDI_HISTORY_LENGTH) midiValueHistory.mix.shift();
+    }
+  } else if (cc === MIDI_CONFIG.cc.satDrive) {
+    midiValues.satDrive = midiValue;
   }
 }
 
@@ -471,6 +497,15 @@ function setup() {
   // Connect to LED status WebSocket
   connectLEDSocket();
 
+  // Close WebSocket cleanly on page unload so stale connections don't linger
+  window.addEventListener('beforeunload', () => {
+    if (ledSocket) {
+      ledSocket.onclose = null;  // Prevent reconnect attempt
+      ledSocket.close();
+      ledSocket = null;
+    }
+  });
+
   // Mic selector
   navigator.mediaDevices.enumerateDevices().then(devices => {
     const inputs = devices.filter(d => d.kind === 'audioinput');
@@ -485,17 +520,45 @@ function setup() {
     micSelect.changed(() => startWithDevice(micSelect.value()));
   });
 
-  // Checkboxes for effects
-  // Chorus is enabled by default for kiosk mode
+  // Effect selection — radio-style (only one active at a time)
+  // Saturation ("Harmonics") is the default at power-up
   let y = 60;
-  for (let name of effectNames) {
-    const defaultOn = (name === "Chorus");  // Chorus on by default
-    const checkbox = createCheckbox(name, defaultOn);
+  const effectOptions = [
+    { name: "Harmonics", key: "Saturation" },
+    { name: "Chorus", key: "Chorus" }
+  ];
+  for (let opt of effectOptions) {
+    const isDefault = (opt.key === activeEffect);
+    const checkbox = createCheckbox(opt.name, isDefault);
     checkbox.position(20, y);
-    checkbox.changed(() => updateWetValues());
-    checkboxes[name] = checkbox;
+    checkbox.changed(() => {
+      // Radio behavior: only one active at a time
+      if (checkbox.checked()) {
+        activeEffect = opt.key;
+        // Uncheck the other
+        for (let other of effectOptions) {
+          if (other.key !== opt.key && checkboxes[other.key]) {
+            checkboxes[other.key].checked(false);
+          }
+        }
+      } else {
+        // Don't allow unchecking the active one — recheck it
+        checkbox.checked(true);
+      }
+    });
+    checkboxes[opt.key] = checkbox;
     y += 25;
   }
+
+  // Audio input toggle checkbox
+  y += 10;  // Small gap after effect selection
+  const inputCheckbox = createCheckbox("Live Input", false);
+  inputCheckbox.position(20, y);
+  inputCheckbox.changed(() => {
+    liveInput = inputCheckbox.checked();
+    sendMIDICC(MIDI_CONFIG.cc.inputSelect, liveInput ? 127 : 0);
+    console.log(`[INPUT] Source: ${liveInput ? 'Live Audio' : 'Tone Generator'}`);
+  });
 
   // Initialize audio effects
   chorus = new Tone.Chorus({
@@ -543,45 +606,13 @@ function updateWetValues() {
   delay.disconnect();
   distortion.disconnect();
 
-  // Reconnect mic and chain effects
+  // Reconnect mic through chorus to destination (browser-side audio)
   if (userMic) userMic.disconnect();
   if (userMic) userMic.connect(chorus);
-
-  let lastNode = chorus;
-
-  if (checkboxes["Chorus"].checked()) {
-    lastNode = chorus;
-  }
-
-  if (checkboxes["Flanger"].checked()) {
-    lastNode.connect(flanger);
-    lastNode = flanger;
-  }
-
-  if (checkboxes["Reverb"].checked()) {
-    lastNode.connect(reverb);
-    lastNode = reverb;
-  }
-
-  if (checkboxes["Delay"].checked()) {
-    lastNode.connect(delay);
-    lastNode = delay;
-  }
-
-  if (checkboxes["Distortion"].checked()) {
-    lastNode.connect(distortion);
-    lastNode = distortion;
-  }
-
-  lastNode.connect(Tone.Destination);
+  chorus.connect(Tone.Destination);
 }
 
 function draw() {
-  // Send mix value to LED controller via postMessage (every 3 frames = ~20Hz)
-  if (frameCount % 3 === 0) {
-    sendAlphaScore(midiValues.mix / 127);
-  }
-
   background(240);
 
   // Track update rate
@@ -638,17 +669,33 @@ function draw() {
   gammaN += 1;
   gammaMean += (gamma_rel - gammaMean) / gammaN;
 
-  // Calculate effect wet values
-  // Chorus: Use SIGMOID centered on personal baseline for smooth transitions
-  // - Amplify deviation from mean before feeding to sigmoid
-  // - Sigmoid provides smooth S-curve (no clicks)
-  // - Sensitivity controls how much alpha change is needed for full swing
+  // Calculate effect wet value using threshold offset
+  // Knob 3 (encoderThreshold, 0-127) controls how far above personal alpha mean
+  // the alpha must be before the effect activates.
+  // At threshold=64: effect is off at baseline, activates on elevated alpha
+  // At threshold=0: effect is always somewhat active
+  // At threshold=127: effect needs very high alpha to activate
   const alphaDeviation = alpha_rel - alphaMean;  // How far from personal baseline
-  const sensitivity = encoderSensitivity;  // Controlled by encoder knob 3 (default 8.0)
-  const smoothness = 6.0;   // Sigmoid steepness (lower = smoother transition)
-  // Sigmoid centered at 0, so positive deviation -> high output, negative -> low
-  const chorus_wetVal = 1 / (1 + Math.exp(-smoothness * alphaDeviation * sensitivity));
+  // Raw alpha mix: sigmoid maps deviation to 0-1 (no threshold applied)
+  // This is what the histogram bar shows — pure alpha activity
+  const rawAlphaMix = 1 / (1 + Math.exp(-10 * alphaDeviation));  // 0.5 at baseline, higher with more alpha
+  rawAlphaMidi = rawAlphaMix * 127;  // 0-127 for histogram display
 
+  // EMA smoothing on raw alpha: ~2 second time constant at ~60fps
+  const smoothK = 0.008;
+  smoothedAlpha += smoothK * (rawAlphaMidi - smoothedAlpha);
+
+  // Threshold gate applied AFTER smoothing
+  // Effect intensity proportional to how far smoothed alpha exceeds threshold
+  const thresholdMidi = encoderThreshold;  // Knob 3 raw value 0-127
+  const chorus_wetVal = smoothedAlpha > thresholdMidi
+    ? Math.min(1, (smoothedAlpha - thresholdMidi) / (127 - thresholdMidi))
+    : 0;
+
+  // Send effect mix value to LED controller (~20Hz)
+  if (frameCount % 3 === 0) {
+    sendAlphaScore(chorus_wetVal);
+  }
 
   // Other effects use sigmoid
   const flanger_wetVal = sigmoid(lowBeta_rel);
@@ -743,7 +790,7 @@ function draw() {
   push();
   const encX = panelX;
   const encY = panelY + panelH + 10;
-  const encW = 300;
+  const encW = 340;
   const encH = 80;
 
   // Background
@@ -751,63 +798,50 @@ function draw() {
   noStroke();
   rect(encX, encY, encW, encH, 8);
 
-  // Encoder label
+  // Effect name + encoder label
+  const effectLabel = activeEffect === 'Chorus' ? 'CHORUS' : 'HARMONICS';
+  const knob2Label = activeEffect === 'Chorus' ? 'DEPTH' : 'DRIVE';
+  const knob2Value = activeEffect === 'Chorus' ? MIDI_CONFIG.fixedValues.depth : MIDI_CONFIG.fixedValues.satDrive;
   fill(255, 220, 0);
-  textSize(24);
+  textSize(20);
   textAlign(LEFT, TOP);
-  text('ENCODERS', encX + 10, encY + 5);
+  text(`EFFECT: ${effectLabel}`, encX + 10, encY + 5);
 
   // Values
-  textSize(20);
+  textSize(18);
   fill(255);
-  text(`GAIN:${MIDI_CONFIG.fixedValues.gain}  DEPTH:${MIDI_CONFIG.fixedValues.depth}  THR:${Math.round((encoderSensitivity - 1.0) / 15.0 * 127)}`, encX + 10, encY + 40);
+  text(`GAIN:${MIDI_CONFIG.fixedValues.gain}  ${knob2Label}:${knob2Value}  THR:${encoderThreshold}`, encX + 10, encY + 35);
+
+  // Show threshold status: effect active or inactive
+  const thresholdActive = chorus_wetVal > 0.1;
+  fill(thresholdActive ? color(0, 150, 255) : color(80));
+  textSize(14);
+  text(thresholdActive ? 'ACTIVE' : 'IDLE', encX + 10, encY + 60);
 
   pop();
 
-  // Apply effect modulations
+  // Apply effect modulations based on active effect
   // MIDI is suppressed when: no EEG data (Muse not connected) or headset not worn
-  if (checkboxes["Chorus"].checked()) {
-    chorus.wet.value = isWorn ? chorus_wetVal : 0;
-    // Only send MIDI when we have EEG data flowing
-    if (midiEnabled && hasEEGData) {
-      if (isWorn) {
-        sendMIDICCThrottled(MIDI_CONFIG.cc.mix, chorus_wetVal * 127);
-      } else {
-        // Send zero when not worn to mute effect
-        sendMIDICCThrottled(MIDI_CONFIG.cc.mix, 0);
-      }
-    }
-  } else {
-    chorus.wet.value = 0;
-    // Send zero mix to Bela when chorus disabled (only if EEG active)
-    if (midiEnabled && hasEEGData) {
-      sendMIDICCThrottled(MIDI_CONFIG.cc.mix, 0);
+  // Use sendMIDICC (not throttled) for both to avoid single-timestamp throttle
+  // blocking the zero-out of the inactive effect
+  if (midiEnabled && hasEEGData) {
+    const wetValue = isWorn ? chorus_wetVal * 127 : 0;
+
+    if (activeEffect === 'Chorus') {
+      sendMIDICCThrottled(MIDI_CONFIG.cc.mix, wetValue);
+      sendMIDICC(MIDI_CONFIG.cc.satMix, 0);
+    } else {
+      sendMIDICCThrottled(MIDI_CONFIG.cc.satMix, wetValue);
+      sendMIDICC(MIDI_CONFIG.cc.mix, 0);
     }
   }
 
-  if (checkboxes["Flanger"].checked()) {
-    flanger.wet.value = flanger_wetVal;
-  } else {
-    flanger.wet.value = 0;
-  }
-
-  if (checkboxes["Reverb"].checked()) {
-    reverb.wet.value = reverb_wetVal;
-  } else {
-    reverb.wet.value = 0;
-  }
-
-  if (checkboxes["Delay"].checked()) {
-    delay.feedback.value = map(delay_feedback, 0, 1, 0, 0.3);
-  } else {
-    delay.feedback.value = 0;
-  }
-
-  if (checkboxes["Distortion"].checked()) {
-    distortion.wet.value = distortion_wetVal;
-  } else {
-    distortion.wet.value = 0;
-  }
+  // Also apply to Tone.js chorus (browser-side, if mic is active)
+  chorus.wet.value = (activeEffect === 'Chorus' && isWorn) ? chorus_wetVal : 0;
+  flanger.wet.value = 0;
+  reverb.wet.value = 0;
+  delay.feedback.value = 0;
+  distortion.wet.value = 0;
 }
 
 function drawSignalPlots() {
@@ -1030,10 +1064,12 @@ function drawMIDIHistogram() {
   y += 16;
 
   // MIDI parameters (0-127 scale)
+  // Mix bar shows RAW alpha activity (pre-threshold), not the gated value
+  const knob2Name = activeEffect === 'Chorus' ? "Depth" : "Drive";
+  const knob2Val = activeEffect === 'Chorus' ? midiValues.depth : midiValues.satDrive;
   const midiParams = [
-    { name: "Mix", value: midiValues.mix, color: [76, 175, 80], dynamic: true },
-    { name: "Rate", value: midiValues.rate, color: [100, 100, 100], dynamic: false },
-    { name: "Depth", value: midiValues.depth, color: [100, 100, 100], dynamic: false },
+    { name: "Mix", value: Math.round(smoothedAlpha), color: [76, 175, 80], dynamic: true },
+    { name: knob2Name, value: knob2Val, color: [100, 100, 100], dynamic: false },
     { name: "Gain", value: midiValues.gain, color: [100, 100, 100], dynamic: false }
   ];
 
@@ -1061,6 +1097,16 @@ function drawMIDIHistogram() {
     rect(histX + 55, y, barWidth, barHeight, 3);
     pop();
 
+    // Orange threshold marker on Mix bar
+    if (param.dynamic) {
+      const thrX = histX + 55 + (encoderThreshold / 127) * barMaxWidth;
+      push();
+      stroke(255, 100, 0);
+      strokeWeight(2);
+      line(thrX, y, thrX, y + barHeight);
+      pop();
+    }
+
     // Value text
     push();
     fill(0);
@@ -1072,41 +1118,6 @@ function drawMIDIHistogram() {
     y += barHeight + barPadding;
   }
 
-  // ========== MIX HISTORY WAVEFORM ==========
-  if (midiValueHistory.mix.length > 1) {
-    y += 5;
-    const waveHeight = 35;
-
-    // Label
-    push();
-    fill(0);
-    textSize(9);
-    textAlign(LEFT, TOP);
-    text("Mix History:", histX + 5, y);
-    pop();
-
-    // Waveform background
-    push();
-    fill(255);
-    stroke(150);
-    rect(histX + 5, y + 12, histWidth - 10, waveHeight, 3);
-    pop();
-
-    // Draw waveform
-    push();
-    stroke(76, 175, 80);
-    strokeWeight(2);
-    noFill();
-    beginShape();
-    const history = midiValueHistory.mix;
-    for (let i = 0; i < history.length; i++) {
-      const x = histX + 5 + (i / (MIDI_HISTORY_LENGTH - 1)) * (histWidth - 10);
-      const yVal = y + 12 + waveHeight - (history[i] / 127) * waveHeight;
-      vertex(x, yVal);
-    }
-    endShape();
-    pop();
-  }
 }
 
 function drawPPGWaveform() {

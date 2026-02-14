@@ -30,6 +30,7 @@ import json
 import os
 import signal
 import sys
+import math
 import time
 import threading
 import subprocess
@@ -110,7 +111,7 @@ class LEDController:
         # Status tracking
         self.bela_connected = False      # LED 0: Bela/MIDI connection
         self.muse_state = ConnectionState.STARTUP  # LED 1: Muse connection
-        self.alpha_score = 0.0           # LED 2: Alpha state score (0-1)
+        self.wet_value = 0.0             # Effect mix value (0-1), same signal as audio
         self.is_worn = False             # Whether headband is on head
 
         # Blink state for connecting animation
@@ -223,9 +224,9 @@ class LEDController:
                 if state == ConnectionState.STREAMING:
                     self.is_worn = True
 
-    def set_alpha_score(self, score: float):
-        with self.lock:
-            self.alpha_score = score
+    def set_wet_value(self, wet: float):
+        """Set effect mix value (0-1) for blue LED — same value driving the audio."""
+        self.wet_value = max(0.0, min(1.0, wet))
 
     def set_worn(self, is_worn: bool):
         with self.lock:
@@ -243,10 +244,28 @@ class LEDController:
         keys = ['gain', 'depth', 'threshold']
         DEBOUNCE_READS = 2  # Must hold same position for 2 polls
 
+        if not hasattr(self, '_enc0_log_count'):
+            self._enc0_log_count = 0
+
         try:
             for i in range(ENCODER_COUNT):
                 # Read encoder position
-                pos = self.encoders[i].position
+                try:
+                    pos = self.encoders[i].position
+                except Exception as read_err:
+                    if i == 0:
+                        self._enc0_log_count += 1
+                        if self._enc0_log_count >= 300:
+                            print(f"[ENC] enc0 READ ERROR: {read_err}")
+                            self._enc0_log_count = 0
+                    continue
+
+                # Debug logging for encoder 0 (gain) — log every ~5 seconds
+                if i == 0:
+                    self._enc0_log_count += 1
+                    if self._enc0_log_count >= 300:
+                        print(f"[ENC] enc0 raw={pos} last={self.last_positions[0]}")
+                        self._enc0_log_count = 0
 
                 # Ignore I2C corruption: any absolute value > 1000 is noise
                 if abs(pos) > 1000:
@@ -313,9 +332,10 @@ class LEDController:
         while self.running:
             with self.lock:
                 muse_state = self.muse_state
-                alpha_score = self.alpha_score
                 is_worn = self.is_worn
                 flash_save = self.flash_save
+            # Read wet value outside lock — set from async WebSocket handler
+            wet_value = self.wet_value
 
             # Update blink state
             self.blink_counter += 1
@@ -347,26 +367,36 @@ class LEDController:
                 # LED 0: Always RED when system is running
                 led0_r, led0_g, led0_b = BRIGHTNESS, 0, 0
 
-                # LED 1: GREEN when Muse connected/streaming
+                # LED 1: GREEN when Muse connected
+                # Smooth slow pulse when streaming AND worn (5-second cycle, dips near off)
                 led1_r, led1_g, led1_b = 0, 0, 0
-                if muse_state in (ConnectionState.STREAMING, ConnectionState.CONNECTED):
+                if muse_state == ConnectionState.STREAMING and is_worn:
+                    pulse = (math.sin(time.time() * 2 * math.pi / 5.0) + 1) / 2  # 0-1 over 5s
+                    # Gamma correction (2.2) for perceptually smooth brightness
+                    gamma_pulse = pulse ** 2.2
+                    led1_g = int(1 + gamma_pulse * (BRIGHTNESS - 1))  # Pulse between near-off and bright
+                elif muse_state in (ConnectionState.STREAMING, ConnectionState.CONNECTED):
                     led1_g = BRIGHTNESS
 
-                # LED 2: BLUE proportional to alpha/mix - only when streaming AND worn
+                # LED 2: BLUE — directly maps the effect wet value (0-1) to brightness
                 led2_r, led2_g, led2_b = 0, 0, 0
-                if muse_state == ConnectionState.STREAMING and is_worn:
-                    led2_b = int(alpha_score * 127)
+                led2_b = int(wet_value * BRIGHTNESS)
 
                 if self.neo:
                     self.neo.set_led_color(0, led0_r, led0_g, led0_b)
                     self.neo.set_led_color(1, led1_r, led1_g, led1_b)
                     self.neo.set_led_color(2, led2_r, led2_g, led2_b)
                     self.neo.update_strip()
+                    if not hasattr(self, '_led2_log'):
+                        self._led2_log = 0
+                    self._led2_log += 1
+                    if self._led2_log % 300 == 0:
+                        print(f"[LED2] b={led2_b} wet={wet_value:.3f}")
 
             except Exception as e:
                 print(f"[LED] Animation error: {e}")
 
-            time.sleep(0.1)  # 10 Hz update rate
+            time.sleep(0.016)  # ~60 Hz update rate for smooth LED pulsing
 
     def cleanup(self):
         """Turn off all LEDs and cleanup"""
@@ -426,8 +456,15 @@ async def handle_websocket(websocket, path=None):
                     led.set_bela_connected(connected)
 
                 elif msg_type == 'alpha_score':
-                    score = data.get('score', 0.0)
-                    led.set_alpha_score(score)
+                    if 'wet' in data:
+                        # New format: direct wet value (0-1)
+                        led.set_wet_value(data['wet'])
+                    elif 'smoothed' in data:
+                        # Old format: compute wet from smoothed alpha and threshold
+                        s = data.get('smoothed', 0.0)
+                        t = data.get('threshold', 64.0)
+                        wet = max(0.0, min(1.0, (s - t) / (127 - t))) if s > t and t < 127 else 0.0
+                        led.set_wet_value(wet)
 
                 elif msg_type == 'midi_status':
                     midi_active = data.get('active', False)

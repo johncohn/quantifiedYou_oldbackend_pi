@@ -120,21 +120,7 @@ class KioskMuseManager {
       // WebSocket not available
     }
 
-    // Listen for messages from visual iframes (alpha_score from xenbox)
-    window.addEventListener('message', (event) => {
-      if (event.data?.type === 'alpha_score') {
-        this._sendAlphaScore(event.data.score);
-      }
-    });
-  }
-
-  _sendAlphaScore(score) {
-    if (this.statusSocket?.readyState === WebSocket.OPEN) {
-      this.statusSocket.send(JSON.stringify({
-        type: 'alpha_score',
-        score: score
-      }));
-    }
+    // alpha_score is sent directly from xenbox_eeg.js via its own WebSocket
   }
 
   _sendStatus() {
@@ -658,8 +644,7 @@ class KioskMuseManager {
       const sensitivity = 8.0;
       const smoothness = 6.0;
       const alphaScore = 1 / (1 + Math.exp(-smoothness * deviation * sensitivity));
-      // Send to LED controller
-      this._sendAlphaScore(alphaScore);
+      // alpha_score sent directly from xenbox_eeg.js via its own WebSocket
     }
 
     // Include last 100 PPG samples for graphing (downsampled from 640 in buffer)
