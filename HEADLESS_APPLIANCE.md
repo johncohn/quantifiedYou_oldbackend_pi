@@ -302,30 +302,124 @@ This decouples threshold (where the effect turns on) from amplitude (how strong 
 
 ---
 
+## WiFi Provisioning (comitup)
+
+The Pi uses [comitup](https://github.com/davesteele/comitup) for phone-based WiFi setup. When no known WiFi network is available, the Pi automatically creates a hotspot.
+
+### How It Works
+
+1. On boot, comitup checks if any known WiFi network is in range
+2. If yes → connects automatically (CONNECTED state)
+3. If no → creates hotspot `xenbox-setup-NNNN` on wlan1 (HOTSPOT state)
+4. User connects phone/laptop to the hotspot
+5. Captive portal appears with list of available WiFi networks
+6. User selects network, enters password → Pi connects, hotspot disappears
+
+### Configuration
+
+| File | Setting |
+|------|---------|
+| `/etc/comitup.conf` | `ap_name: xenbox-setup` |
+| | `primary_wifi_device: wlan1` |
+| | `enable_appliance_mode: false` (critical — only one usable WiFi adapter) |
+
+### Important Notes
+
+- **wlan0 is disabled/unmanaged** — do not use it, it causes problems
+- **wlan1** is the only active WiFi adapter
+- `enable_appliance_mode: false` prevents comitup from trying to use wlan0 as upstream
+- The captive portal page may take a few seconds to fully load (white screen initially is normal)
+- Comitup manages WiFi connections via NetworkManager — do not manually create NM WiFi connections
+
+### Checking Status
+
+```bash
+# Via SSH (ethernet at 192.168.2.2 when hotspot is active)
+sudo comitup-cli           # Interactive status
+sudo journalctl -u comitup -n 30   # Logs
+nmcli connection show --active      # Active connections
+```
+
+---
+
+## Kiosk Escape Shortcuts
+
+The kiosk runs Chromium in fullscreen on labwc (Wayland compositor) with auto-restart. These keyboard shortcuts are configured in `~/.config/labwc/rc.xml`:
+
+| Shortcut | Action | Script |
+|----------|--------|--------|
+| `Ctrl+Alt+T` | Open terminal (lxterminal) | built-in |
+| `Ctrl+Alt+Q` | Kill kiosk + open terminal | `/home/xenbox/kill-kiosk.sh` |
+| `Ctrl+Alt+K` | Restart kiosk | `/home/xenbox/restart-kiosk.sh` |
+
+After modifying `rc.xml`, reload with: `pkill -SIGHUP labwc`
+
+---
+
 ## Deployment
 
 ### Deploy visualization blob
 ```bash
-scp xenbox_eeg.js xenbox@<PI_IP>:/home/xenbox/quantifiedYou_oldbackend_pi/keystone/public/code/blob-jCTLjHalgu97
-# Update filesize in DB:
-sqlite3 keystone.db "UPDATE Visual SET code_filesize=<SIZE> WHERE code_filename='blob-jCTLjHalgu97';"
+PI=192.168.68.126
+
+# 1. Copy JS to blob location (this is what the kiosk actually loads)
+scp xenbox_eeg.js xenbox@$PI:/home/xenbox/quantifiedYou_oldbackend_pi/keystone/public/code/blob-jCTLjHalgu97
+
+# 2. Also copy to repo location (for reference)
+scp xenbox_eeg.js xenbox@$PI:/home/xenbox/quantifiedYou_oldbackend_pi/xenbox_eeg.js
+
+# 3. Update filesize in DB (use actual byte count)
+SIZE=$(wc -c < xenbox_eeg.js)
+ssh xenbox@$PI "sqlite3 /home/xenbox/quantifiedYou_oldbackend_pi/keystone/keystone.db \"UPDATE Visual SET code_filesize = $SIZE WHERE code_filename = 'blob-jCTLjHalgu97';\""
+
+# 4. Hard reload kiosk page (cache bypass via Chrome DevTools)
+ssh xenbox@$PI 'python3 -c "
+import json, asyncio, websockets
+async def main():
+    targets = json.loads(__import__(\"urllib.request\").request.urlopen(\"http://localhost:9222/json\").read())
+    ws_url = next(t[\"webSocketDebuggerUrl\"] for t in targets if t.get(\"type\")==\"page\")
+    async with websockets.connect(ws_url) as ws:
+        await ws.send(json.dumps({\"id\":1,\"method\":\"Page.reload\",\"params\":{\"ignoreCache\":True}}))
+        print(await asyncio.wait_for(ws.recv(), timeout=5))
+asyncio.run(main())
+"'
 ```
+
+**Gotchas:**
+- The root-level `keystone.db` is EMPTY — the real DB is at `keystone/keystone.db`
+- Copying to `xenbox_eeg.js` in the repo does NOT update the kiosk — must update the blob file
+- Always update DB filesize when blob size changes
 
 ### Deploy LED controller
 ```bash
-scp scripts/led_status_controller.py xenbox@<PI_IP>:/home/xenbox/quantifiedYou_oldbackend_pi/scripts/
-ssh xenbox@<PI_IP> "sudo systemctl restart yq-led-controller"
+PI=192.168.68.126
+
+# 1. Copy file
+scp scripts/led_status_controller.py xenbox@$PI:/home/xenbox/quantifiedYou_oldbackend_pi/scripts/
+
+# 2. Force kill + restart (systemctl restart hangs over SSH)
+PID=$(ssh xenbox@$PI 'echo xenbox | sudo -S systemctl status yq-led-controller.service 2>&1 | grep "Main PID" | awk "{print \$3}"')
+ssh xenbox@$PI "echo xenbox | sudo -S kill -9 $PID 2>&1; sleep 1; echo xenbox | sudo -S systemctl reset-failed yq-led-controller.service 2>&1; echo xenbox | sudo -S systemctl start yq-led-controller.service 2>&1"
 ```
 
 ### Deploy frontend (React build)
 ```bash
+PI=192.168.68.126
 cd frontend && npm run build
-rsync -a frontend/build/ xenbox@<PI_IP>:/home/xenbox/quantifiedYou_oldbackend_pi/frontend/build/
-# Clear browser cache and reload via Chrome DevTools WebSocket on port 9222
+rsync -a frontend/build/ xenbox@$PI:/home/xenbox/quantifiedYou_oldbackend_pi/frontend/build/
+# Then reload kiosk page (same Chrome DevTools method as blob deploy step 4)
 ```
 
 ### Deploy Bela PD patch
 ```bash
-scp -r bela/midi-chorus/ root@192.168.7.2:/root/Bela/projects/midi-chorus/
-ssh root@192.168.7.2 "make -C /root/Bela stop; make -C /root/Bela run PROJECT=midi-chorus"
+PI=192.168.68.126
+
+# 1. Stage files on Pi (can't scp directly to Bela from laptop)
+scp bela/midi-chorus/_main.pd bela/midi-chorus/saturator~.pd xenbox@$PI:/tmp/
+
+# 2. Copy from Pi to Bela
+ssh xenbox@$PI 'scp -o StrictHostKeyChecking=no /tmp/_main.pd /tmp/saturator~.pd root@192.168.7.2:/root/Bela/projects/midi-chorus/'
+
+# 3. Restart Bela project
+ssh xenbox@$PI 'ssh -o StrictHostKeyChecking=no root@192.168.7.2 "make -C /root/Bela stop 2>&1; make -C /root/Bela run PROJECT=midi-chorus 2>&1 &"'
 ```
