@@ -68,6 +68,7 @@ except ImportError:
 # Try to import encoder libraries
 try:
     import board
+    import digitalio
     from adafruit_seesaw.seesaw import Seesaw
     from adafruit_seesaw.rotaryio import IncrementalEncoder
     from adafruit_seesaw.digitalio import DigitalIO
@@ -86,8 +87,8 @@ BRIGHTNESS = 64         # 25% brightness (64/255)
 
 # Encoder configuration
 ENCODER_I2C_ADDR = 0x49  # Default address for Adafruit Quad Encoder Breakout
-ENCODER_COUNT = 2         # Slot 1 dead on seesaw — only slots 2,3 usable
-ENCODER_INDICES = [2, 3]  # Slot 2=depth, 3=threshold (gain uses saved value)
+ENCODER_COUNT = 3
+ENCODER_INDICES = [1, 2, 3]  # 1=gain, 2=depth, 3=threshold
 SETTINGS_FILE = '/home/xenbox/encoder_settings.json'
 
 # Default encoder values (0-127 MIDI range)
@@ -203,14 +204,11 @@ class LEDController:
             for i, enc_idx in enumerate(ENCODER_INDICES):
                 enc = IncrementalEncoder(self.seesaw, encoder=enc_idx)
                 btn = DigitalIO(self.seesaw, pin=12 + enc_idx)  # Button pins: 12, 13, 14, 15
-                btn.switch_to_input(pull=True)  # Input with pull-up
+                btn.switch_to_input(pull=digitalio.Pull.UP)  # Must use Pull.UP enum, not True
                 self.encoders.append(enc)
                 self.buttons.append(btn)
-                self.last_positions[i] = enc.position
-
-            # Set initial encoder positions from current hardware state
-            for i in range(len(self.encoders)):
-                self.last_positions[i] = self.encoders[i].position
+                # Do NOT read enc.position here — early reads may latch encoder in bad state
+                # last_positions stays at 0, first poll will pick up actual position
             print(f"[ENC] Initialized {ENCODER_COUNT} encoders at I2C 0x{ENCODER_I2C_ADDR:02X}")
             print(f"[ENC] Loaded values: {self.encoder_values}")
         except Exception as e:
@@ -299,7 +297,7 @@ class LEDController:
             return False
 
         changed = False
-        keys = ['depth', 'threshold']  # Gain knob (slot 1) dead — uses saved value
+        keys = ['gain', 'depth', 'threshold']
         DEBOUNCE_READS = 2  # Must hold same position for 2 polls
 
         if not hasattr(self, '_poll_count'):
@@ -418,7 +416,7 @@ class LEDController:
             if not hasattr(self, '_enc_poll_counter'):
                 self._enc_poll_counter = 0
             self._enc_poll_counter += 1
-            if self._enc_poll_counter >= 6:
+            if self._enc_poll_counter >= 2:
                 self._enc_poll_counter = 0
                 encoder_changed = self._poll_encoders()
                 if encoder_changed:
