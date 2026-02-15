@@ -86,8 +86,8 @@ BRIGHTNESS = 64         # 25% brightness (64/255)
 
 # Encoder configuration
 ENCODER_I2C_ADDR = 0x49  # Default address for Adafruit Quad Encoder Breakout
-ENCODER_COUNT = 3         # Using 3 of 4 available encoders (indices 1, 2, 3; skipping 0)
-ENCODER_INDICES = [1, 2, 3]  # Which encoder slots on the quad breakout to use
+ENCODER_COUNT = 2         # Slot 1 dead on seesaw — only slots 2,3 usable
+ENCODER_INDICES = [2, 3]  # Slot 2=depth, 3=threshold (gain uses saved value)
 SETTINGS_FILE = '/home/xenbox/encoder_settings.json'
 
 # Default encoder values (0-127 MIDI range)
@@ -135,10 +135,12 @@ class LEDController:
         self.seesaw = None
         self.encoders = []
         self.buttons = []
-        self.last_positions = [0, 0, 0]
-        self.stable_positions = [0, 0, 0]  # Debounced positions
-        self.stable_count = [0, 0, 0]      # How many reads at same position
-        self.button_was_pressed = [True, True, True]  # Start True to debounce startup
+        self.last_positions = [0] * ENCODER_COUNT
+        self.stable_positions = [0] * ENCODER_COUNT  # Debounced positions
+        self.stable_count = [0] * ENCODER_COUNT      # How many reads at same position
+        self.button_was_pressed = [True] * ENCODER_COUNT  # Start True to debounce startup
+        self.button_cooldown = [0] * ENCODER_COUNT  # Cooldown counter to prevent rapid-fire
+        self.encoder_dead = [False] * ENCODER_COUNT  # Slots that hang on read
 
         # Connected WebSocket clients (for sending encoder values)
         self.ws_clients = set()
@@ -158,18 +160,46 @@ class LEDController:
         if HAS_ENCODER:
             self._init_encoders()
 
-        # Start animation thread
+        # Start animation + encoder polling thread (combined, like original working code)
         self.animation_thread = threading.Thread(target=self._animation_loop, daemon=True)
         self.animation_thread.start()
 
+    def _i2c_device_present(self):
+        """Check if encoder breakout is on the I2C bus using i2cdetect (no Python I2C)."""
+        try:
+            result = subprocess.run(
+                ['i2cdetect', '-y', '1'],
+                capture_output=True, text=True, timeout=3
+            )
+            # Look for our address (0x49) in the output
+            addr_hex = f"{ENCODER_I2C_ADDR:02x}"  # "49"
+            if addr_hex in result.stdout:
+                print(f"[ENC] I2C device found at 0x{addr_hex}")
+                return True
+            else:
+                print(f"[ENC] No I2C device at 0x{addr_hex} — encoder board not connected")
+                return False
+        except Exception as e:
+            print(f"[ENC] i2cdetect failed: {e} — skipping encoders")
+            return False
+
     def _init_encoders(self):
-        """Initialize I2C encoders via Adafruit seesaw"""
+        """Initialize I2C encoders via Adafruit seesaw.
+        First probes I2C bus with i2cdetect to avoid kernel crash on missing device."""
+        # Safety: check if device is actually present before Python I2C access
+        if not self._i2c_device_present():
+            print("[ENC] Encoder board not detected — running without encoders")
+            return
+
         try:
             i2c = board.I2C()
             self.seesaw = Seesaw(i2c, addr=ENCODER_I2C_ADDR)
             product_id = (self.seesaw.get_version() >> 16) & 0xFFFF
             print(f"[ENC] Seesaw product ID: {product_id}")
 
+            # Initialize encoders and buttons — button init MUST happen alongside
+            # encoder init (DigitalIO configures seesaw pins needed by encoder module)
+            # Init in REVERSE order to test if read-order affects first encoder
             for i, enc_idx in enumerate(ENCODER_INDICES):
                 enc = IncrementalEncoder(self.seesaw, encoder=enc_idx)
                 btn = DigitalIO(self.seesaw, pin=12 + enc_idx)  # Button pins: 12, 13, 14, 15
@@ -178,10 +208,8 @@ class LEDController:
                 self.buttons.append(btn)
                 self.last_positions[i] = enc.position
 
-            # Set initial encoder positions to match loaded values
-            keys = ['gain', 'depth', 'threshold']
-            for i, key in enumerate(keys):
-                # Convert 0-127 value to encoder position
+            # Set initial encoder positions from current hardware state
+            for i in range(len(self.encoders)):
                 self.last_positions[i] = self.encoders[i].position
             print(f"[ENC] Initialized {ENCODER_COUNT} encoders at I2C 0x{ENCODER_I2C_ADDR:02X}")
             print(f"[ENC] Loaded values: {self.encoder_values}")
@@ -265,43 +293,50 @@ class LEDController:
 
     def _poll_encoders(self):
         """Poll encoder positions and buttons, return True if values changed.
-        Uses debouncing: position must be stable for 3 consecutive reads."""
+        Uses debouncing: position must be stable for 2 consecutive reads.
+        Runs in its own thread (not animation thread) so I2C hangs can't block LEDs."""
         if not self.encoders:
             return False
 
         changed = False
-        keys = ['gain', 'depth', 'threshold']
+        keys = ['depth', 'threshold']  # Gain knob (slot 1) dead — uses saved value
         DEBOUNCE_READS = 2  # Must hold same position for 2 polls
 
-        if not hasattr(self, '_enc0_log_count'):
-            self._enc0_log_count = 0
+        if not hasattr(self, '_poll_count'):
+            self._poll_count = 0
+            self._enc_read_errors = [0, 0, 0]
+            self._enc_read_ok = [0, 0, 0]
+        self._poll_count += 1
+
+        # Log all encoder status every ~5 seconds (300 polls at 60Hz)
+        if self._poll_count % 300 == 0:
+            status = []
+            for i in range(ENCODER_COUNT):
+                slot = ENCODER_INDICES[i]
+                dead = " DEAD" if self.encoder_dead[i] else ""
+                status.append(f"slot{slot}(ok={self._enc_read_ok[i]} err={self._enc_read_errors[i]} pos={self.last_positions[i]}{dead})")
+            print(f"[ENC] poll#{self._poll_count}: {' | '.join(status)}")
 
         try:
             for i in range(ENCODER_COUNT):
+                if self.encoder_dead[i]:
+                    continue
+
                 # Read encoder position
                 try:
                     pos = self.encoders[i].position
+                    self._enc_read_ok[i] += 1
                 except Exception as read_err:
-                    if i == 0:
-                        self._enc0_log_count += 1
-                        if self._enc0_log_count >= 300:
-                            print(f"[ENC] enc0 READ ERROR: {read_err}")
-                            self._enc0_log_count = 0
+                    self._enc_read_errors[i] += 1
+                    if self._enc_read_errors[i] <= 3 or self._enc_read_errors[i] % 300 == 0:
+                        print(f"[ENC] slot{ENCODER_INDICES[i]} read error #{self._enc_read_errors[i]}: {read_err}")
                     continue
-
-                # Debug logging for encoder 0 (gain) — log every ~5 seconds
-                if i == 0:
-                    self._enc0_log_count += 1
-                    if self._enc0_log_count >= 300:
-                        print(f"[ENC] enc0 raw={pos} last={self.last_positions[0]}")
-                        self._enc0_log_count = 0
 
                 # Ignore I2C corruption: any absolute value > 1000 is noise
                 if abs(pos) > 1000:
                     continue
 
                 # Ignore wild jumps from last known-good position
-                # (don't update last_positions — that was causing ping-pong with noise)
                 if abs(pos - self.last_positions[i]) > 50:
                     continue
 
@@ -321,15 +356,22 @@ class LEDController:
                         new_val = max(0, min(127, old_val + delta))
                         if new_val != old_val:
                             self.encoder_values[keys[i]] = new_val
-                            print(f"[ENC] {keys[i]}: {old_val} -> {new_val}")
+                            print(f"[ENC] {keys[i]}: {old_val} -> {new_val} (slot{ENCODER_INDICES[i]})")
                             changed = True
 
-                # Read button (active low) — also debounce
-                pressed = not self.buttons[i].value
-                if pressed and not self.button_was_pressed[i]:
-                    print(f"[ENC] Button {i} pressed - saving settings")
-                    self._save_encoder_settings()
-                self.button_was_pressed[i] = pressed
+                # Read button (active low) — debounce + cooldown
+                try:
+                    if self.button_cooldown[i] > 0:
+                        self.button_cooldown[i] -= 1
+                    else:
+                        pressed = not self.buttons[i].value
+                        if pressed and not self.button_was_pressed[i]:
+                            print(f"[ENC] Button {i} (slot{ENCODER_INDICES[i]}) pressed - saving settings")
+                            self._save_encoder_settings()
+                            self.button_cooldown[i] = 60  # ~1 sec cooldown at 60Hz
+                        self.button_was_pressed[i] = pressed
+                except Exception:
+                    pass  # Button read failed, skip
 
         except Exception as e:
             print(f"[ENC] Poll error: {e}")
@@ -357,7 +399,7 @@ class LEDController:
         self.ws_clients -= disconnected
 
     def _animation_loop(self):
-        """Background thread for LED updates and encoder polling"""
+        """Background thread for LED updates + encoder polling at 10Hz (original working rate)"""
         while self.running:
             with self.lock:
                 muse_state = self.muse_state
@@ -372,10 +414,15 @@ class LEDController:
                 self.blink_counter = 0
                 self.blink_state = not self.blink_state
 
-            # Poll encoders
-            encoder_changed = self._poll_encoders()
-            if encoder_changed:
-                self._broadcast_encoder_values()
+            # Poll encoders at ~10Hz (every 6th frame) to avoid saturating I2C bus
+            if not hasattr(self, '_enc_poll_counter'):
+                self._enc_poll_counter = 0
+            self._enc_poll_counter += 1
+            if self._enc_poll_counter >= 6:
+                self._enc_poll_counter = 0
+                encoder_changed = self._poll_encoders()
+                if encoder_changed:
+                    self._broadcast_encoder_values()
 
             try:
                 # Handle save flash animation (white flash for 500ms)
@@ -431,7 +478,7 @@ class LEDController:
             except Exception as e:
                 print(f"[LED] Animation error: {e}")
 
-            time.sleep(0.016)  # ~60 Hz update rate for smooth LED pulsing
+            time.sleep(0.016)  # ~60 Hz for smooth LED pulsing
 
     def cleanup(self):
         """Turn off all LEDs and cleanup"""
