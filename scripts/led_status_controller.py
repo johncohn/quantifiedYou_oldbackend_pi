@@ -256,12 +256,11 @@ class LEDController:
                 print(f"[LED] Muse state: {self.muse_state.value} -> {state.value}")
                 old_state = self.muse_state
                 self.muse_state = state
-                if state == ConnectionState.STREAMING:
-                    self.is_worn = True
                 # Reset wet value when leaving streaming (Muse disconnected)
                 if old_state == ConnectionState.STREAMING and state != ConnectionState.STREAMING:
                     self.wet_value = 0.0
-                    print("[LED] Reset wet_value to 0 (Muse no longer streaming)")
+                    self.is_worn = False
+                    print("[LED] Reset wet_value and is_worn to 0 (Muse no longer streaming)")
 
     def set_wet_value(self, wet: float):
         """Set effect mix value (0-1) for blue LED — same value driving the audio."""

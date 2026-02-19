@@ -945,8 +945,9 @@ class KioskMuseManager {
 
   _scheduleReconnect() {
     if (this.reconnectAttempts >= this.maxReconnectAttempts) {
-      this.log(`Max reconnect attempts (${this.maxReconnectAttempts}) reached`);
+      this.log(`Max reconnect attempts (${this.maxReconnectAttempts}) reached — reloading page in 10s`);
       this.setState(ConnectionState.ERROR);
+      setTimeout(() => window.location.reload(), 10000);
       return;
     }
 
