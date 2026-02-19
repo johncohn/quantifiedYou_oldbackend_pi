@@ -455,11 +455,10 @@ class LEDController:
                 elif muse_state in (ConnectionState.STREAMING, ConnectionState.CONNECTED):
                     led1_r, led1_g, led1_b = BRIGHTNESS, 0, BRIGHTNESS  # PURPLE solid
 
-                # LED 2: AQUA — effect mix level (only when streaming + worn)
-                led2_r, led2_g, led2_b = 0, 0, 0
-                if muse_state == ConnectionState.STREAMING and is_worn:
-                    mix_br = int(wet_value * BRIGHTNESS)
-                    led2_r, led2_g, led2_b = 0, mix_br, int(mix_br * 0.8)  # AQUA (green + blue)
+                # LED 2: AQUA — directly mirrors effect wet value (0-1)
+                # xenbox_eeg.js already zeros wet when not worn or no EEG data
+                mix_br = int(wet_value * BRIGHTNESS)
+                led2_r, led2_g, led2_b = 0, mix_br, int(mix_br * 0.8)  # AQUA (green + blue)
 
                 if self.neo:
                     self.neo.set_led_color(0, led0_r, led0_g, led0_b)
