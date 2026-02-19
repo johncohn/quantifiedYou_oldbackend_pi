@@ -233,9 +233,9 @@ This is enforced in two places:
 |-----|-------|---------|
 | 0 | **GREEN** (solid) | System ready, running normally |
 | 0 | **RED** (solid) | Bypass mode (GPIO17 grounded) |
-| 1 | **PURPLE** (pulse) | Muse connected + worn (5s sine pulse, gamma-corrected) |
-| 1 | **PURPLE** (solid) | Muse connected, not worn |
-| 2 | **AQUA** (variable) | Effect mix level (only when streaming + worn, off otherwise) |
+| 1 | **PURPLE** (pulse) | Muse streaming + worn (5s sine pulse, gamma-corrected) |
+| 1 | **PURPLE** (solid) | Muse connected but not worn |
+| 2 | **AQUA** (variable) | Effect mix level — directly mirrors audio wet value (0 when not worn) |
 
 ### Bypass Switch (GPIO17)
 
@@ -251,6 +251,8 @@ A physical bypass switch connects **GPIO17** to **GND**. The LED controller conf
 
 Button press on any encoder saves current values to `/home/xenbox/encoder_settings.json`.
 
+> **Implementation note:** Encoder buttons must be initialized with `btn.switch_to_input(pull=digitalio.Pull.UP)` — using `pull=True` (a boolean) silently falls through to plain `INPUT` mode, which sends `GPIO_PULLENCLR` to the seesaw chip and breaks encoder counting on the lowest-numbered slot. Encoders are polled at 30Hz (every 2nd frame of the 60Hz LED loop).
+
 ---
 
 ## Threshold and Smoothing
@@ -263,6 +265,16 @@ The effect activation uses a **gated linear ramp** above threshold:
 4. **Linear ramp**: when above threshold, effect intensity is proportional to overshoot
 
 This decouples threshold (where the effect turns on) from amplitude (how strong it gets).
+
+---
+
+## Muse Bluetooth Recovery
+
+The Muse uses Chrome's Web Bluetooth `getDevices()` API to reconnect without a user gesture (no button click needed). After disconnect, the browser retries with exponential backoff (1s → 30s max, 10 attempts).
+
+**If reconnection exhausts all attempts** (e.g. device left on for days, Muse put in pairing mode too late), the page automatically reloads after 10 seconds to clear stale Bluetooth state. This is the most reliable recovery mechanism — the page reload re-initializes the Bluetooth stack cleanly.
+
+**PPG-based worn detection** (infrared channel mean threshold) controls `isWorn`. LED 1 pulses only when `isWorn=true`. The effect and LED 2 are both zeroed when `isWorn=false`, so the system is silent and dark when the headset is sitting on a table even if Muse is connected and streaming.
 
 ---
 
