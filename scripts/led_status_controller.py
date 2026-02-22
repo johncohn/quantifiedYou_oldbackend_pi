@@ -428,7 +428,7 @@ class LEDController:
                     if self.flash_counter <= 5:  # 500ms white flash
                         if self.neo:
                             for i in range(LED_COUNT):
-                                self.neo.set_led_color(i, BRIGHTNESS, BRIGHTNESS, BRIGHTNESS)
+                                self.neo.set_led_color(i, BRIGHTNESS, BRIGHTNESS, BRIGHTNESS)  # white: r=g so swap doesn't matter
                             self.neo.update_strip()
                         time.sleep(0.1)
                         continue
@@ -461,9 +461,9 @@ class LEDController:
                 led2_r, led2_g, led2_b = 0, mix_br, int(mix_br * 0.8)  # AQUA (green + blue)
 
                 if self.neo:
-                    self.neo.set_led_color(0, led0_r, led0_g, led0_b)
-                    self.neo.set_led_color(1, led1_r, led1_g, led1_b)
-                    self.neo.set_led_color(2, led2_r, led2_g, led2_b)
+                    self.neo.set_led_color(0, led0_g, led0_r, led0_b)  # swap r/g for RGB LEDs
+                    self.neo.set_led_color(1, led1_g, led1_r, led1_b)
+                    self.neo.set_led_color(2, led2_g, led2_r, led2_b)
                     self.neo.update_strip()
                     if not hasattr(self, '_led2_log'):
                         self._led2_log = 0

@@ -229,6 +229,8 @@ This is enforced in two places:
 
 ### NeoPixel LEDs (WS2812B x3, SPI GPIO10)
 
+> **Pixel order:** LEDs use RGB byte order. Pi5Neo only supports an `RGB` pixel type but internally outputs GRB, so r and g are swapped at every `set_led_color()` call to compensate.
+
 | LED | Color | Meaning |
 |-----|-------|---------|
 | 0 | **GREEN** (solid) | System ready, running normally |
