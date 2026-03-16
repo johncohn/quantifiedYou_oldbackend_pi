@@ -268,6 +268,8 @@ The effect activation uses a **gated linear ramp** above threshold:
 
 This decouples threshold (where the effect turns on) from amplitude (how strong it gets).
 
+See **[THRESHOLD_MATH.md](THRESHOLD_MATH.md)** for the full signal chain with equations.
+
 ---
 
 ## Muse Bluetooth Recovery
@@ -314,6 +316,13 @@ The Muse uses Chrome's Web Bluetooth `getDevices()` API to reconnect without a u
 | `scripts/start-kiosk.sh` | Chromium kiosk launcher |
 | systemd: `yq-led-controller.service` | LED/encoder service (runs as root for SPI) |
 
+### Documentation
+
+| File | Purpose |
+|------|---------|
+| `HEADLESS_APPLIANCE.md` | This file — architecture, hardware, deployment |
+| `THRESHOLD_MATH.md` | EEG-to-audio signal chain equations and knob reference |
+
 ---
 
 ## WiFi Provisioning (comitup)
@@ -353,6 +362,32 @@ sudo comitup-cli           # Interactive status
 sudo journalctl -u comitup -n 30   # Logs
 nmcli connection show --active      # Active connections
 ```
+
+---
+
+## Debugging Consoles
+
+### Kiosk (Chromium) — Remote DevTools from Mac
+
+Chromium runs with `--remote-debugging-port=9222`. Forward the port over SSH then open Chrome on your Mac:
+
+```bash
+ssh -L 9222:localhost:9222 xenbox@192.168.68.126
+```
+
+Then visit `chrome://inspect` in Chrome on your Mac → click **inspect** under the kiosk page.
+
+> **To see the Muse/EEG console:** The EEG code runs inside a srcdoc iframe. In the DevTools console, click the **context selector dropdown** (top-left, shows `top`) and switch to the `blob:` frame.
+
+### Bela — Web IDE Console from Mac
+
+The Bela IDE runs on port 80 at `192.168.7.2` (USB). Forward through the Pi:
+
+```bash
+ssh -L 8080:192.168.7.2:80 xenbox@192.168.68.126
+```
+
+Then visit `http://localhost:8080` in your Mac browser. The IDE shows the PD patch console, MIDI traffic, and CPU load in real time.
 
 ---
 

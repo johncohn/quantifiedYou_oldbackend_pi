@@ -98,3 +98,4 @@ Currently, if you want to add a file, you would need to host it elsewhere on the
 
 ## Authorship
 This app was created at NYU as part of a research project.
+
