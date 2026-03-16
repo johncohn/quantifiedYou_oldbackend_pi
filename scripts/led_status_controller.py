@@ -356,7 +356,7 @@ class LEDController:
                             print(f"[ENC] {keys[i]}: {old_val} -> {new_val} (slot{ENCODER_INDICES[i]})")
                             changed = True
                             self._autosave_dirty = True
-                            self._autosave_countdown = 150  # save 5s after last turn (150 polls @ 30Hz)
+                            self._autosave_time = time.time() + 5.0  # save 5s after last turn
 
                 # Read button (active low) — debounce + cooldown
                 try:
@@ -377,8 +377,7 @@ class LEDController:
 
         # Auto-save 5s after last knob change (in case user doesn't press button)
         if getattr(self, '_autosave_dirty', False):
-            self._autosave_countdown -= 1
-            if self._autosave_countdown <= 0:
+            if time.time() >= self._autosave_time:
                 self._autosave_dirty = False
                 self._save_encoder_settings()
 
