@@ -316,6 +316,13 @@ The Muse uses Chrome's Web Bluetooth `getDevices()` API to reconnect without a u
 | `scripts/start-kiosk.sh` | Chromium kiosk launcher |
 | systemd: `yq-led-controller.service` | LED/encoder service (runs as root for SPI) |
 
+### Mac Dev Scripts
+
+| File | Purpose |
+|------|---------|
+| `bela-ide.sh` | Tunnel Bela IDE (ports 80/3000/40100) and open Chrome at `localhost:8080?port=8080` |
+| `xenbox-dashboard.sh` | Tunnel xenbox frontend (ports 3000/3001/8765) and open Chrome at `localhost:3000` |
+
 ### Documentation
 
 | File | Purpose |
