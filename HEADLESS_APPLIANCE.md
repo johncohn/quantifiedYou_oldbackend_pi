@@ -381,13 +381,13 @@ Then visit `chrome://inspect` in Chrome on your Mac → click **inspect** under 
 
 ### Bela — Web IDE Console from Mac
 
-The Bela IDE runs on port 80 at `192.168.7.2` (USB). Forward through the Pi:
+The Bela IDE frontend runs on port 80, but its backend WebSocket runs on port **3000**. Both must be tunneled or the IDE loads as an empty shell with no projects:
 
 ```bash
-ssh -L 8080:192.168.7.2:80 xenbox@192.168.68.126
+ssh -L 8080:192.168.7.2:80 -L 3000:192.168.7.2:3000 xenbox@192.168.68.126
 ```
 
-Then visit `http://localhost:8080` in your Mac browser. The IDE shows the PD patch console, MIDI traffic, and CPU load in real time.
+Then visit `http://localhost:8080` in your Mac browser. The IDE shows the PD patch console, MIDI traffic, CPU load, and all projects in real time.
 
 ---
 
