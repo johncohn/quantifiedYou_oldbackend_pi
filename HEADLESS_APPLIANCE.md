@@ -323,6 +323,23 @@ The Muse uses Chrome's Web Bluetooth `getDevices()` API to reconnect without a u
 | `bela-ide.sh` | Tunnel Bela IDE (ports 80/3000/40100) and open Chrome at `localhost:8080?port=8080` |
 | `xenbox-dashboard.sh` | Tunnel xenbox frontend (ports 3000/3001/8765) and open Chrome at `localhost:3000` |
 
+Both scripts connect via `xenbox.local` (mDNS) and work on any local network — no hardcoded IP.
+
+### Taking the Device to a New Location
+
+The system is network-portable. Only one manual step is needed when connecting to a new WiFi network:
+
+1. **Provision WiFi** — on first boot at a new location, the Pi creates a hotspot (`xenbox-setup-XXXX`). Connect your phone to it; a captive portal appears to enter the new network's WiFi password. Once connected, the hotspot disappears.
+
+Everything else is automatic:
+
+| Component | Why it's portable |
+|-----------|------------------|
+| App / Keystone API | Uses `xenbox.local` (mDNS) — resolves on any local network |
+| Bela audio | USB connection (`192.168.7.2`) — completely WiFi-independent |
+| Muse Bluetooth | Bluetooth — WiFi-independent |
+| Mac scripts | Use `xenbox.local` — work on any network |
+
 ### Documentation
 
 | File | Purpose |
